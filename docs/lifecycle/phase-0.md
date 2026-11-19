@@ -41,7 +41,7 @@ Lifecycle record, aligned with ISO/IEC 12207 (plan, entry and exit criteria, rev
 | Stack starts with docker compose | Built and started; pages load; app runs as non-root | Pass (see note) |
 | Tests pass offline | 131 tests, 0 failures | Pass |
 
-**Note on the image build.** In the build sandbox, the image was built with the sandbox's proxy certificate added, because outbound TLS there goes through an inspecting proxy. The committed `Dockerfile` has not been built on an ordinary network yet. The CI workflow has not run yet either; its first run is on the push of this phase.
+**Note on the image build.** In the build sandbox, the image was built with the sandbox's proxy certificate added, because outbound TLS there goes through an inspecting proxy. The committed `Dockerfile` has not been built on an ordinary network yet. The CI workflow (lint, secret scan, tests) passed on GitHub for commit `14b8426`.
 
 ## Review record
 
