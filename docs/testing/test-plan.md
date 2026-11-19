@@ -44,6 +44,22 @@ Phase 0 coverage:
 | SEC-44 secret scanning | `test_secret_scanner.py` |
 | UX-14 accessibility basics | `test_accessibility_basics` |
 
+Phase 1 coverage:
+
+| Requirement | Tests |
+|---|---|
+| FR-04 effective remaining | `tests/unit/test_budgets.py`: `test_hierarchy_ancestor_cap_enforced_when_child_has_room`, `test_independent_child_ignores_parent_remaining_for_own_cap`, two property tests |
+| FR-18 / SEC-05 block precedence, default deny | `tests/unit/test_registry.py`: `test_blocked_vendor_denies_even_when_model_allowed` (property, all status combinations and aliases), `test_unknown_alias_denies`, `test_alias_to_blocked_model_denies`, `test_blocked_vendor_not_bypassed_by_model_alias` |
+| FR-18 emergency block, reason, no lift path | `tests/integration/test_demo_data.py`, `tests/system/test_gateway_registry.py` |
+| UX-3 block cascade | `test_cascade_rendering_for_models_of_a_blocked_vendor`, `test_no_model_ever_renders_allowed_under_a_blocked_vendor` |
+| UX-4 unregistered label | `test_unregistered_is_a_separate_label_with_its_own_action` |
+| UX-2 / UX-D1 coverage badge | `test_every_project_has_a_gateway_routed_badge_and_none_claims_enforced`, `test_enforced_is_claimed_only_with_custody_and_verified_egress` |
+| UX-8 budget bar and subdivision warning | `tests/system/test_budgets_pages.py` |
+| TB-9 cross-site form posts | `test_cross_site_form_post_is_refused` |
+| SEC-27 output encoding | `test_reason_text_is_escaped_when_shown` |
+
+Property tests use hypothesis. The budget property test builds random budget trees and random sequences of reserve and settle, and checks that no limiting budget ever goes below zero.
+
 ## How to run
 
 ```bash

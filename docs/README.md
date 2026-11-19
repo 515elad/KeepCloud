@@ -13,6 +13,7 @@ Open <http://localhost:8000>, then follow the demo script for the current phase.
 | Phase | Demo script | Lifecycle record |
 |---|---|---|
 | 0 Foundation | [demo/phase-0.md](demo/phase-0.md) | [lifecycle/phase-0.md](lifecycle/phase-0.md) |
+| 1 Budgets and policy visibility | [demo/phase-1.md](demo/phase-1.md) | [lifecycle/phase-1.md](lifecycle/phase-1.md) |
 
 ## Map
 

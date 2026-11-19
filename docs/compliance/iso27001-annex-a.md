@@ -2,14 +2,14 @@
 
 KeepAir is built to be **aligned with** these controls. This is not a certification, no certification is claimed, and the mapping has not been reviewed by an auditor (PRD v1.5 Section 13).
 
-Status after phase 0. "Planned" means no code exists yet.
+Status after phase 1. "Planned" means no code exists yet.
 
 | Control | Topic | Status | Code | Test |
 |---|---|---|---|---|
-| A.5.15 | Access control | Planned, phase 5 (roles, route separation, SEC-14) | None | None |
+| A.5.15 | Access control | Partly: the block decision is a pure function with default deny and vendor-over-model precedence; the UI never shows a state the policy does not hold. Cross-site form posts are refused. Roles and route separation (SEC-14) are phase 5. | `src/keepair/registry.py` (`decide_block`, `effective_model_status`), `src/keepair/web/app.py` (`same_origin`) | `tests/unit/test_registry.py`, `tests/system/test_gateway_registry.py::test_cross_site_form_post_is_refused` |
 | A.5.17 | Authentication information | Planned: gateway tokens stored as SHA-256 hash only (phase 2); TOTP MFA (phase 5) | None | None |
-| A.5.18 | Access rights | Planned, phase 5 (owners, two-person actions) | None | None |
-| A.8.15 | Logging | Partly: every failure writes an alert record. Tamper-evident audit log is phase 6. | `src/keepair/failures.py`, `src/keepair/schema.py` (`alerts`) | `tests/system/test_failure_visibility.py` |
+| A.5.18 | Access rights | Partly: no code path can lift a block; lifting is shown disabled until the two-person flow of phase 5. Owners are phase 5. | `src/keepair/registry.py` (`add_block` only) | `tests/integration/test_demo_data.py::test_there_is_no_code_path_that_lifts_a_block_yet`, `tests/system/test_gateway_registry.py::test_lifting_a_block_is_shown_disabled_with_the_reason_and_has_no_route` |
+| A.8.15 | Logging | Partly: every failure writes an alert record; every registry status change is recorded with actor, time and reason in the same transaction. Tamper-evident audit log is phase 6. | `src/keepair/failures.py`, `src/keepair/registry.py` (`add_block`), `src/keepair/schema.py` (`alerts`, `registry_changes`) | `tests/system/test_failure_visibility.py`, `tests/integration/test_demo_data.py::test_add_block_records_who_when_and_why_and_bumps_the_version` |
 | A.8.16 | Monitoring | Partly: failure counters at `/metrics`; heartbeat-based health with Unknown as a distinct state. Live heartbeats from phase 2. | `src/keepair/metrics.py`, `src/keepair/health.py` | `tests/unit/test_health_status.py`, `tests/unit/test_metrics.py`, `tests/integration/test_database.py::test_heartbeat_moves_a_component_from_unknown_through_every_state` |
 | A.8.28 | Secure coding | In place for what exists: autoescaped templates, Content-Security-Policy without inline script or style, no float for money, no wall clock or unseeded randomness outside injected modules, lint with security rules (ruff `S`). | `src/keepair/web/app.py` (`SECURITY_HEADERS`), `src/keepair/money.py`, `pyproject.toml` | `tests/system/test_shell.py::test_security_headers_on_every_response`, `::test_pages_have_no_inline_script_or_style`, `tests/unit/test_no_wallclock.py`, `tests/unit/test_money.py` |
 | A.8.29 | Security testing | Partly: secret scanner in CI with a self-test that plants a key. Bypass suite from phase 2. | `scripts/secret_scan.sh`, `.github/workflows/ci.yml` | `tests/unit/test_secret_scanner.py` |
