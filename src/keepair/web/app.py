@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
 from sqlalchemy import Engine, select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from keepair import __version__
 from keepair.clock import Clock, SystemClock, from_iso
@@ -19,8 +22,10 @@ from keepair.failures import Alert, AlertStore, FailureReporter
 from keepair.health import ComponentHealth, read_health, unknown_health
 from keepair.help_registry import HelpRegistry
 from keepair.metrics import Metrics
-from keepair.schema import app_meta, demo_placeholder
-from keepair.web.formatting import format_money, format_ts
+from keepair.registry import RegistryError, add_block
+from keepair.schema import app_meta
+from keepair.web import views
+from keepair.web.formatting import format_ts
 from keepair.web.helpui import HelpContext
 from keepair.web.pages import PAGES, PAGES_BY_SLUG, Page
 
@@ -35,12 +40,24 @@ SECURITY_HEADERS = {
 }
 
 
+MAX_FORM_BYTES = 4096
+# No sign-in exists until phase 5, so UI changes are recorded under this name.
+UI_ACTOR = "demo-operator"
+
+
+def same_origin(request: Request) -> bool:
+    source = request.headers.get("origin") or request.headers.get("referer")
+    if not source:
+        return False
+    return urlsplit(source).netloc == request.headers.get("host")
+
+
 @dataclass(slots=True)
 class PageState:
     health: list[ComponentHealth]
     database_reachable: bool
     demo_clock: str | None = None
-    placeholder: str | None = None
+    tenant_id: uuid.UUID | None = None
     alerts: list[Alert] = field(default_factory=list)
 
 
@@ -76,7 +93,11 @@ def create_app(
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
-        response = await call_next(request)
+        if request.method not in ("GET", "HEAD", "OPTIONS") and not same_origin(request):
+            # Forms may only be posted from this site's own pages (TB-9, CSRF).
+            response = PlainTextResponse("Cross-site request refused.", status_code=403)
+        else:
+            response = await call_next(request)
         for name, value in SECURITY_HEADERS.items():
             response.headers.setdefault(name, value)
         return response
@@ -88,16 +109,13 @@ def create_app(
                 meta = dict(conn.execute(select(app_meta.c.key, app_meta.c.value)).all())
                 if "demo_clock" in meta:
                     state.demo_clock = format_ts(from_iso(meta["demo_clock"]))
-                row = conn.execute(
-                    select(demo_placeholder).where(demo_placeholder.c.id == 1)
-                ).one_or_none()
-                if row is not None:
-                    state.placeholder = format_money(row.amount_micro, row.currency)
+                if "tenant_id" in meta:
+                    state.tenant_id = uuid.UUID(meta["tenant_id"])
         except SQLAlchemyError:
             store.note_db_down()
             reporter.report(
                 "DATABASE_UNREACHABLE",
-                "The database could not be reached. Component health and demo data "
+                "The database could not be reached. Component health and page data "
                 "cannot be read, so every component is shown as Unknown.",
             )
             state = PageState(health=unknown_health(), database_reachable=False)
@@ -131,12 +149,123 @@ def create_app(
     def metrics_endpoint() -> PlainTextResponse:
         return PlainTextResponse(metrics.render(), media_type="text/plain; version=0.0.4")
 
+    def page_context(slug: str) -> tuple[Page, PageState]:
+        return PAGES_BY_SLUG[slug], load_state()
+
+    @app.get("/budgets", response_class=HTMLResponse)
+    def budgets_page() -> HTMLResponse:
+        page, state = page_context("budgets")
+        rows = None
+        if state.tenant_id:
+            with engine.connect() as conn:
+                rows = views.load_budget_rows(conn, state.tenant_id)
+        return render("budgets.html", page=page, state=state, rows=rows)
+
+    @app.get("/budgets/{budget_id}", response_class=HTMLResponse)
+    def budget_detail(budget_id: uuid.UUID) -> HTMLResponse:
+        page, state = page_context("budgets")
+        row = None
+        if state.tenant_id:
+            with engine.connect() as conn:
+                rows = views.load_budget_rows(conn, state.tenant_id)
+            row = next((r for r in rows if r.id == budget_id), None)
+        if row is None and state.database_reachable:
+            raise HTTPException(status_code=404)
+        return render("budget_detail.html", page=page, state=state, row=row)
+
+    def load_registry(state: PageState) -> views.RegistryView | None:
+        if not state.tenant_id:
+            return None
+        with engine.connect() as conn:
+            return views.load_registry(conn, state.tenant_id)
+
+    @app.get("/gateway", response_class=HTMLResponse)
+    def gateway_page() -> HTMLResponse:
+        page, state = page_context("gateway")
+        return render("gateway.html", page=page, state=state, registry=load_registry(state))
+
+    def block_form(
+        subject_type: str, subject_id: str, reason: str = "", error: str | None = None
+    ) -> HTMLResponse:
+        page, state = page_context("gateway")
+        registry = load_registry(state)
+        if registry is None:
+            raise HTTPException(status_code=404)
+        if subject_type == "vendor":
+            subject = next((v for v in registry.vendors if v.id == subject_id), None)
+            affected = [m for m in registry.models if m.vendor_id == subject_id]
+        elif subject_type == "model":
+            subject = next((m for m in registry.models if m.id == subject_id), None)
+            affected = [subject] if subject else []
+        else:
+            subject, affected = None, []
+        if subject is None:
+            raise HTTPException(status_code=404)
+        return render(
+            "block_confirm.html",
+            status_code=422 if error else 200,
+            page=page,
+            state=state,
+            subject_type=subject_type,
+            subject_id=subject_id,
+            affected=affected,
+            reason=reason,
+            error=error,
+        )
+
+    @app.get("/gateway/block", response_class=HTMLResponse)
+    def block_confirm(type: str, id: str) -> HTMLResponse:
+        return block_form(type, id)
+
+    @app.post("/gateway/block")
+    async def block_submit(request: Request):
+        body = await request.body()
+        if len(body) > MAX_FORM_BYTES:
+            raise HTTPException(status_code=413)
+        form = {k: v[0] for k, v in parse_qs(body.decode("utf-8", "replace")).items()}
+        subject_type, subject_id = form.get("type", ""), form.get("id", "")
+        reason = form.get("reason", "")
+        state = load_state()
+        if not state.tenant_id:
+            raise HTTPException(status_code=404)
+        try:
+            with engine.begin() as conn:
+                add_block(conn, state.tenant_id, subject_type, subject_id, UI_ACTOR, reason, clock)
+        except RegistryError as exc:
+            return block_form(subject_type, subject_id, reason, str(exc))
+        return RedirectResponse(f"/gateway#{subject_type}s-title", status_code=303)
+
     @app.get("/{slug}", response_class=HTMLResponse)
     def page(slug: str) -> HTMLResponse:
         if slug == "overview" or slug not in PAGES_BY_SLUG:
             raise HTTPException(status_code=404)
         return render_page(PAGES_BY_SLUG[slug])
 
+    @app.exception_handler(413)
+    async def too_large(request: Request, exc: Exception) -> HTMLResponse:
+        return render(
+            "error.html",
+            status_code=413,
+            heading="Form too large",
+            detail="The submitted form is larger than allowed.",
+        )
+
+    @app.exception_handler(OperationalError)
+    async def database_down(request: Request, exc: Exception) -> HTMLResponse:
+        store.note_db_down()
+        reporter.report(
+            "DATABASE_UNREACHABLE",
+            f"The database could not be reached while handling {request.url.path}. "
+            "Nothing was changed.",
+        )
+        return render(
+            "error.html",
+            status_code=503,
+            heading="The database cannot be reached",
+            detail="Nothing was changed. The failure is recorded as an alert on the Overview page.",
+        )
+
+    @app.exception_handler(RequestValidationError)
     @app.exception_handler(404)
     async def not_found(request: Request, exc: Exception) -> HTMLResponse:
         return render(

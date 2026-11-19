@@ -38,6 +38,16 @@ def test_migration_downgrade_and_upgrade_round_trip(database_url, engine):
         command.upgrade(cfg, "head")
 
 
+@pytest.mark.req("v1.4 Section 2.3 (Alembic migrations)", "ISO 27001 A.8.32")
+def test_migrated_database_matches_the_declared_schema(engine):
+    from alembic.autogenerate import compare_metadata
+    from alembic.migration import MigrationContext
+
+    with engine.connect() as conn:
+        diff = compare_metadata(MigrationContext.configure(conn), metadata)
+    assert diff == []
+
+
 @pytest.mark.req("Hard rule 2 (deterministic demo data)")
 def test_seed_twice_gives_identical_data(engine):
     with engine.begin() as conn:
@@ -46,24 +56,29 @@ def test_seed_twice_gives_identical_data(engine):
         seed(conn, demo_clock())
         second = snapshot(conn)
     assert first == second
-    assert first["demo_placeholder"] == [(1, "Placeholder amount", 2_050_000_000, "USD")]
     assert ("demo_clock", "2026-01-15T09:00:00Z") in first["app_meta"]
     assert first["heartbeats"] == []
 
 
 @pytest.mark.req("FR-02 (money as BIGINT micro-units)", "ISO 4217")
-def test_money_column_is_bigint_and_currency_is_checked(engine):
-    columns = {c["name"]: c for c in inspect(engine).get_columns("demo_placeholder")}
-    assert str(columns["amount_micro"]["type"]) == "BIGINT"
-    with pytest.raises(IntegrityError), engine.begin() as conn:
-        conn.execute(text("INSERT INTO demo_placeholder VALUES (2, 'x', 1, 'usd')"))
-    with pytest.raises(IntegrityError), engine.begin() as conn:
-        conn.execute(text("INSERT INTO demo_placeholder VALUES (2, 'x', -1, 'USD')"))
+def test_money_columns_are_bigint_and_checked(engine):
+    inspector = inspect(engine)
+    money = {
+        "budgets": ["cap_micros", "committed_micros", "reserved_micros"],
+        "models": ["input_price_micros_per_1k", "output_price_micros_per_1k"],
+    }
+    for table, names in money.items():
+        columns = {c["name"]: c for c in inspector.get_columns(table)}
+        for name in names:
+            assert str(columns[name]["type"]) == "BIGINT", f"{table}.{name}"
+    for bad in ("currency = 'usd'", "cap_micros = -1", "committed_micros = -1", "policy = 'NONE'"):
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(text(f"UPDATE budgets SET {bad}"))  # noqa: S608
 
 
 @pytest.mark.req("ISO 8601", "Hard rule 4 (UTC storage)")
 def test_timestamps_are_stored_with_timezone(engine):
-    for table in ("heartbeats", "alerts"):
+    for table in TABLES:
         for column in inspect(engine).get_columns(table):
             if "TIMESTAMP" in str(column["type"]):
                 assert column["type"].timezone is True, f"{table}.{column['name']}"
