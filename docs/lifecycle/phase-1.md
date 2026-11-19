@@ -48,7 +48,7 @@ Lifecycle record, aligned with ISO/IEC 12207 (plan, entry and exit criteria, rev
 | Every new field has a registry entry; worked examples match the code | `tests/system/test_field_help.py` (walks 32 pages; 8 calculated fields checked against code) | Pass |
 | Demo data matches the brief and is deterministic | `tests/integration/test_demo_data.py`, `test_seed_twice_gives_identical_data` | Pass |
 | Migration matches the declared schema, up and down | `test_migrated_database_matches_the_declared_schema`, `test_migration_downgrade_and_upgrade_round_trip` | Pass |
-| Lint, secret scan and all tests pass | 205 tests, 0 failures; 98% line coverage | Pass locally; CI result recorded below |
+| Lint, secret scan and all tests pass | 205 tests, 0 failures; 98% line coverage | Pass locally and in CI (commit `a15d508`) |
 
 **Notes.**
 
