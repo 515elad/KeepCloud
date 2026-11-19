@@ -1,0 +1,30 @@
+{% extends "page.html" %}
+{% block title %}Block {{ subject_id }}{% endblock %}
+{% block heading %}
+<p class="crumbs"><a href="/gateway">Gateway</a></p>
+<h1>Block {{ subject_type }} <code>{{ subject_id }}</code></h1>
+{% endblock %}
+{% block content %}
+<section aria-labelledby="impact-title">
+  <h2 id="impact-title">What this does</h2>
+  <div data-kpi data-field-id="block.impact">
+    <p>{{ help.name("block.impact") }} {{ help.button("block.impact") }}</p>
+    <ul class="links" data-impact>
+      {% for m in affected %}<li><code>{{ m.id }}</code>{% if m.effective.value != "ALLOWED" %} <span class="sub">already blocked</span>{% endif %}</li>{% else %}<li>No models are registered for this vendor.</li>{% endfor %}
+    </ul>
+  </div>
+  <p class="hint">The block applies at once. Lifting it later needs two administrators, and that flow arrives in phase 5, so this demo cannot undo it except by reloading the demo data. {{ pending("SD-03") }}</p>
+</section>
+<section aria-labelledby="confirm-title">
+  <h2 id="confirm-title">Confirm</h2>
+  <form method="post" action="/gateway/block" class="form">
+    <input type="hidden" name="type" value="{{ subject_type }}"><input type="hidden" name="id" value="{{ subject_id }}">
+    <div class="field">
+      <div class="field__label"><label for="reason" data-field-id="block.reason">{{ help.name("block.reason") }}</label> {{ help.button("block.reason") }}</div>
+      <textarea id="reason" name="reason" data-field-id="block.reason" rows="3" minlength="10" maxlength="300" required{% if error %} aria-invalid="true" aria-describedby="reason-error"{% endif %}>{{ reason }}</textarea>
+      {% if error %}<p class="field__error" id="reason-error" role="alert"><span aria-hidden="true">×</span> {{ error }}</p>{% endif %}
+    </div>
+    <p class="actions"><button type="submit" class="btn btn--danger">Block {{ subject_id }}</button> <a href="/gateway">Cancel</a></p>
+  </form>
+</section>
+{% endblock %}

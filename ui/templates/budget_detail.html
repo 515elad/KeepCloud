@@ -1,0 +1,67 @@
+{% extends "page.html" %}
+{% block title %}{% if row %}{{ row.name }} budget{% else %}Budget{% endif %}{% endblock %}
+{% block heading %}
+<p class="crumbs"><a href="/budgets">Budgets</a>{% if row and row.parent %} / <a href="/budgets/{{ row.parent[0] }}">{{ row.parent[1] }}</a>{% endif %}</p>
+<h1>{% if row %}{{ row.name }}{% else %}Budget{% endif %}</h1>
+{% endblock %}
+{% block content %}
+{% if row %}
+<section aria-labelledby="summary-title">
+  <h2 id="summary-title">{{ row.scope_label }} budget</h2>
+  <dl class="facts">
+    <div data-kpi data-field-id="budget.policy"><dt>{{ help.name("budget.policy") }} {{ help.button("budget.policy") }}</dt><dd><span class="policy policy--{{ row.policy | lower }}">{{ row.policy_label }}</span></dd></div>
+    <div data-kpi data-field-id="budget.mode"><dt>{{ help.name("budget.mode") }} {{ help.button("budget.mode") }}</dt><dd>{{ row.mode_label }}</dd></div>
+    <div data-kpi data-field-id="budget.period"><dt>{{ help.name("budget.period") }} {{ help.button("budget.period") }}</dt><dd class="num">{{ row.period_text }}</dd></div>
+    {% if row.coverage %}
+    <div data-kpi data-field-id="project.coverage"><dt>{{ help.name("project.coverage") }} {{ help.button("project.coverage") }}</dt><dd>{{ coverage_badge(row.coverage) }} {{ pending("UX-D1") }}</dd></div>
+    {% endif %}
+  </dl>
+  <dl class="kpis">
+    <div data-kpi data-field-id="budget.cap"><dt>{{ help.name("budget.cap") }} {{ help.button("budget.cap") }}</dt><dd class="num">{{ row.cap_text }}</dd></div>
+    <div data-kpi data-field-id="budget.committed"><dt>{{ help.name("budget.committed") }} {{ help.button("budget.committed") }}</dt><dd class="num">{{ row.committed_text }}</dd></div>
+    <div data-kpi data-field-id="budget.reserved"><dt>{{ help.name("budget.reserved") }} {{ help.button("budget.reserved") }}</dt><dd class="num">{{ row.reserved_text }}</dd></div>
+    <div data-kpi data-field-id="budget.remaining"><dt>{{ help.name("budget.remaining") }} {{ help.button("budget.remaining") }}</dt><dd class="num{% if row.over_cap %} is-over{% endif %}">{{ row.remaining_text }}</dd></div>
+  </dl>
+  <div class="bar-large" data-kpi data-field-id="budget.usage">
+    <h3>{{ help.name("budget.usage") }} {{ help.button("budget.usage") }}</h3>
+    {{ budget_bar(row.bar) }}
+    <ul class="legend" aria-hidden="true"><li><span class="key key--committed"></span>Committed (spent)</li><li><span class="key key--reserved"></span>Reserved (held for requests in flight, not spent)</li><li><span class="key key--remaining"></span>Remaining</li></ul>
+  </div>
+</section>
+
+<section aria-labelledby="effective-title">
+  <h2 id="effective-title">Effective remaining</h2>
+  <dl class="kpis">
+    <div data-kpi data-field-id="budget.effective_remaining">
+      <dt>{{ help.name("budget.effective_remaining") }} {{ help.button("budget.effective_remaining") }}</dt>
+      <dd class="num" data-effective>{{ row.effective_text }}</dd>
+      {% if row.limited_by %}<dd class="sub" data-limited-by>Limited by {{ row.limited_by }}, which has less left than this budget.</dd>{% endif %}
+      {% if row.overcommit_text %}<dd class="warn" data-subdivision-warning><span aria-hidden="true">!</span> Sub-budget caps exceed this cap by {{ row.overcommit_text }}. This cap applies first.</dd>{% endif %}
+    </div>
+  </dl>
+  <p class="hint">The lowest remaining amount among the limiting budgets below sets the allowance. A budget whose mode is Independent is not limited by its parent, so the list stops there.</p>
+  <div class="table-wrap" tabindex="0" role="region" aria-labelledby="effective-title">
+    <table data-table="path">
+      <thead><tr>{{ help.th("budget.scope") }}{{ help.th("budget.policy") }}{{ help.th("budget.enforcing") }}{{ help.th("budget.remaining") }}</tr></thead>
+      <tbody>
+        {% for item in row.path %}
+        <tr{% if item.binding %} class="is-binding" data-binding{% endif %}>
+          <td><a href="/budgets/{{ item.id }}">{{ item.name }}</a>{% if loop.first %}<span class="sub">This budget</span>{% endif %}</td>
+          <td>{{ item.policy_label }}</td>
+          <td>{% if item.enforcing %}Yes{% else %}No, it only reports{% endif %}</td>
+          <td class="num amount">{{ item.remaining_text }}{% if item.binding %}<span class="sub">Lowest. This sets the allowance.</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{% if row.children %}
+<section aria-labelledby="children-title">
+  <h2 id="children-title">Budgets below this one</h2>
+  <ul class="links">{% for child_id, child_name in row.children %}<li><a href="/budgets/{{ child_id }}">{{ child_name }}</a></li>{% endfor %}</ul>
+</section>
+{% endif %}
+{% endif %}
+{% endblock %}

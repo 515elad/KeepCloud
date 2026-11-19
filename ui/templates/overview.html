@@ -1,24 +1,13 @@
 {% extends "page.html" %}
 {% block content %}
-{% if not state.database_reachable %}
-<p class="notice notice--bad" role="status"><span aria-hidden="true">×</span> The database cannot be reached. Health is shown as Unknown and the demo data cannot be read. See the alerts below.</p>
-{% endif %}
-
 <section aria-labelledby="demo-title">
-  <h2 id="demo-title">Phase 0 placeholders</h2>
+  <h2 id="demo-title">Demo data</h2>
   <dl class="kpis">
-    <div data-kpi data-field-id="demo.placeholder_amount">
-      <dt>{{ help.name("demo.placeholder_amount") }} {{ help.button("demo.placeholder_amount") }}</dt>
-      <dd class="num">{{ state.placeholder or "Not loaded" }}</dd>
-    </div>
     <div data-kpi data-field-id="demo.clock">
       <dt>{{ help.name("demo.clock") }} {{ help.button("demo.clock") }}</dt>
       <dd class="num">{{ state.demo_clock or "Not loaded" }}</dd>
     </div>
   </dl>
-  {% if state.database_reachable and not state.demo_clock %}
-  <p class="hint">No demo data is loaded. Run <code>python -m keepair.demo.seed</code>.</p>
-  {% endif %}
 </section>
 
 <section aria-labelledby="components-title">

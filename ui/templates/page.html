@@ -12,8 +12,9 @@
 </section>
 {% endblock %}
 {% block main %}
-<h1>{{ page.title }}</h1>
+{% block heading %}<h1>{{ page.title }}</h1>{% endblock %}
 <p class="lede">{{ page.summary }}</p>
+{{ db_notice(state) }}
 {% block content %}{% endblock %}
 <section aria-labelledby="roadmap-title">
   <h2 id="roadmap-title">{% if page.slug == "overview" %}Still to come on this page{% else %}Not built yet{% endif %}</h2>

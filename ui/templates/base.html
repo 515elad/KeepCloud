@@ -1,6 +1,27 @@
 {% macro status_chip(status) %}
 <span class="status status--{{ status.value | lower }}"><span class="status__icon" aria-hidden="true">{{ {"Healthy": "✓", "Degraded": "!", "Failing": "×", "Unknown": "?"}[status.value] }}</span>{{ status.value }}</span>
 {%- endmacro %}
+{% macro budget_bar(bar, compact=False) %}
+<div class="bar{% if bar.over_cap %} bar--over{% endif %}" data-bar>
+  <div class="bar__track" aria-hidden="true">
+    <span class="bar__seg bar__seg--committed w-{{ bar.committed_pct }}" data-seg="committed"></span><span class="bar__seg bar__seg--reserved w-{{ bar.reserved_pct }}" data-seg="reserved"></span>
+    {% for tick in (50, 80, 90, 100) %}<span class="bar__tick at-{{ tick }}{% if tick in bar.reached %} is-reached{% endif %}" data-tick="{{ tick }}"></span>{% endfor %}
+  </div>
+  <div class="bar__scale" aria-hidden="true">{% for tick in (50, 80, 90, 100) %}<span class="at-{{ tick }}{% if tick in bar.reached %} is-reached{% endif %}">{{ tick }}{% if tick == 100 %}%{% endif %}</span>{% endfor %}</div>
+  <p class="bar__text">{{ bar.short if compact else bar.summary }}</p>
+</div>
+{%- endmacro %}
+{% macro coverage_badge(coverage) %}
+<span class="cov cov--{{ coverage.name | lower | replace('_', '-') }}" data-coverage="{{ coverage.value }}"><span class="cov__icon" aria-hidden="true">{{ {"ENFORCED": "●", "GATEWAY_ROUTED": "◐", "MONITORED": "○", "UNCONTROLLED": "△"}[coverage.name] }}</span>{{ coverage.value }}</span>
+{%- endmacro %}
+{% macro pending(decision) %}<span class="pending" data-pending="{{ decision }}">Pending decision <code>{{ decision }}</code></span>{% endmacro %}
+{% macro db_notice(state) %}
+{% if not state.database_reachable %}
+<p class="notice notice--bad" role="status"><span aria-hidden="true">×</span> The database cannot be reached. Health is shown as Unknown and this page's data cannot be read. See the alerts on the Overview page.</p>
+{% elif not state.tenant_id %}
+<p class="notice" role="status">No demo data is loaded. Run <code>python -m keepair.demo.seed</code>.</p>
+{% endif %}
+{%- endmacro %}
 <!doctype html>
 <html lang="en" dir="ltr">
 <head>

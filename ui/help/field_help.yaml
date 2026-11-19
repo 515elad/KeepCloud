@@ -58,26 +58,6 @@ fields:
     validation: Must carry a timezone. Stored as UTC.
     prd_ref: FR-21 (heartbeats), SEC-37
 
-  demo.placeholder_amount:
-    name: Placeholder amount
-    meaning: A sample amount with no business meaning, shown in phase 0 only. It proves that money is stored as whole micro-units and formatted in one place.
-    unit: USD. Stored as micro-units (1 USD = 1,000,000 micro-units). Shown with two decimals and the ISO 4217 code.
-    source: calculated
-    source_detail: The stored amount comes from the demo seed script. The displayed value is calculated from it.
-    formula: |
-      display_amount = amount_micro / 1,000,000
-      shown with two decimals, followed by currency
-    formula_fn: display_amount
-    worked_example:
-      description: The single placeholder record in the demo data.
-      inputs:
-        amount_micro: "2050000000"
-        currency: USD
-      result: 2,050.00 USD
-    allowed_range: 0 to 9,223,372,036,854,775,807 micro-units (a 64-bit integer).
-    validation: Must be a whole number of micro-units, zero or more. The currency must be a three-letter ISO 4217 code.
-    prd_ref: FR-02 (money as micro-units), Section 2.3 of the v1.4 build spec
-
   demo.clock:
     name: Demo data as of
     meaning: The fixed moment the demo data set was generated for. It never changes, so the demo data is identical on every run.
@@ -155,3 +135,450 @@ fields:
     allowed_range: Free text written by the application.
     validation: Escaped when shown. Never built from user input.
     prd_ref: SEC-36 (no silent failure), SEC-34 (redaction)
+
+  budget.scope:
+    name: Budget
+    meaning: The part of the organization this budget belongs to. Budgets follow the hierarchy of organization, department, team and project.
+    unit: Text. The scope name, with its level underneath.
+    source: seed script
+    source_detail: Demo hierarchy from the seed script. Creating budgets in the UI is not part of phase 1.
+    worked_example:
+      description: A project budget in the demo data.
+      result: Research Agent (Project)
+    allowed_range: One budget per scope and period.
+    validation: The database refuses a second budget for the same scope, period and start date.
+    prd_ref: FR-04 (hierarchical budgets)
+
+  project.coverage:
+    name: Coverage
+    meaning: How much control KeepAir has over a project's AI spend. Enforced is shown only when the gateway is used, KeepAir holds the provider key, and egress control is verified.
+    unit: Text. One of Enforced, Gateway-routed, Monitored, Uncontrolled.
+    source: calculated
+    source_detail: Calculated from the project's key custody, its egress check and any uncontrolled-spend finding.
+    formula: |
+      coverage = Uncontrolled    when uncontrolled_finding is yes
+      coverage = Monitored       when key_custody is not KEEPAIR
+      coverage = Enforced        when egress_verified is yes
+      coverage = Gateway-routed  otherwise
+    formula_fn: coverage_state
+    worked_example:
+      description: The Research Agent project in the demo data. KeepAir holds the key, but egress control is not verified.
+      inputs:
+        project: Research Agent
+        key_custody: KEEPAIR
+        egress_verified: "no"
+        uncontrolled_finding: "no"
+      result: Gateway-routed
+    allowed_range: Exactly one of the four states. Enforced cannot appear in the MVP because egress control (FR-20) is not built.
+    validation: Calculated only. It cannot be set by hand.
+    prd_ref: UX-2 (coverage badge), UX-D1 (pending decision, default Gateway-routed), FR-20
+
+  budget.policy:
+    name: Policy
+    meaning: What happens when spend reaches the cap. Monitor and Soft limit only report; Hard limit and Approval limit spend.
+    unit: Text. One of Monitor, Soft limit, Hard limit, Approval.
+    source: seed script
+    source_detail: Set per budget. Demo values come from the seed script.
+    worked_example:
+      description: The Research Agent project budget in the demo data.
+      result: Approval
+    allowed_range: MONITOR, SOFT, HARD or APPROVAL.
+    validation: Any other value is rejected by the database. A hard limit will also need an owner from phase 5.
+    prd_ref: FR-05 (policy modes), FR-04
+
+  budget.mode:
+    name: Mode
+    meaning: Whether the budget stands alone or is a share of its parent. A Subdivision budget is also limited by its parent; an Independent budget is not.
+    unit: Text. Independent or Subdivision.
+    source: seed script
+    source_detail: Set per budget. The default is Independent.
+    worked_example:
+      description: The Research Agent project budget is a share of the Agents team budget.
+      result: Subdivision
+    allowed_range: INDEPENDENT or SUBDIVISION.
+    validation: A Subdivision budget must have a parent in the same currency.
+    prd_ref: FR-04 (independent cap or subdivision)
+
+  budget.period:
+    name: Period
+    meaning: The time span the cap applies to.
+    unit: Period type, then first and last day as ISO 8601 dates.
+    source: seed script
+    source_detail: Set per budget. Demo values come from the seed script.
+    worked_example:
+      description: The Research Agent project budget.
+      result: Month, 2026-01-01 to 2026-01-31
+    allowed_range: Month, Quarter or Year.
+    validation: Any other period is rejected by the database.
+    prd_ref: FR-04 (monthly, quarterly and annual budgets)
+
+  budget.cap:
+    name: Cap
+    meaning: The most this budget may spend in its period.
+    unit: Money in the budget's currency. Stored as micro-units (1 unit = 1,000,000 micro-units), shown with two decimals and the ISO 4217 code.
+    source: seed script
+    source_detail: Set per budget. Demo values come from the seed script.
+    worked_example:
+      description: The Research Agent project budget.
+      result: 35,000.00 USD
+    allowed_range: 0 or more.
+    validation: Whole micro-units, never negative. The currency must be a three-letter ISO 4217 code.
+    prd_ref: FR-04, FR-02 (money as micro-units)
+
+  budget.committed:
+    name: Committed
+    meaning: Money already spent against this budget in the period, including spend of its Subdivision sub-budgets.
+    unit: Money in the budget's currency. Stored as micro-units, shown with two decimals.
+    source: gateway
+    source_detail: Written by the gateway when a request is settled (from phase 2). In phase 1 the values are seeded demo data.
+    worked_example:
+      description: The Research Agent project budget.
+      result: 14,000.00 USD
+    allowed_range: 0 or more.
+    validation: Never negative (database check).
+    prd_ref: FR-05 (settle), FR-04, UX-8
+
+  budget.reserved:
+    name: Reserved
+    meaning: Money held for requests that are in flight and not yet settled. It is not spent, and it is released if the request costs less.
+    unit: Money in the budget's currency. Stored as micro-units, shown with two decimals.
+    source: gateway
+    source_detail: Written by the gateway when a request is reserved (from phase 2). In phase 1 the values are seeded demo data.
+    worked_example:
+      description: The Research Agent project budget.
+      result: 1,750.00 USD
+    allowed_range: 0 or more.
+    validation: Never negative (database check).
+    prd_ref: FR-05 (reserve), UX-8 (reserved is not spent)
+
+  budget.usage:
+    name: Usage
+    meaning: How much of the cap is committed and how much is reserved. Marks show 50, 80, 90 and 100% of the cap.
+    unit: Percentage of the cap, two decimals, rounded down. The bar itself is drawn in whole percent.
+    source: calculated
+    source_detail: Calculated from cap, committed and reserved.
+    formula: |
+      committed_pct = committed / cap x 100
+      reserved_pct  = reserved / cap x 100
+      remaining_pct = 100 - committed_pct - reserved_pct  (0 when over the cap)
+    formula_fn: budget_usage
+    worked_example:
+      description: The Research Agent project budget.
+      inputs:
+        cap: 35,000.00 USD
+        committed: 14,000.00 USD
+        reserved: 1,750.00 USD
+      result: Committed 40.00%, reserved 5.00%, remaining 55.00%
+    allowed_range: 0% upward. More than 100% in total means the budget is over its cap.
+    validation: A cap of 0 shows 0%.
+    prd_ref: UX-8 (budget bar), FR-04 (threshold examples)
+
+  budget.remaining:
+    name: Remaining
+    meaning: What is left of this budget's own cap. It does not take parent budgets into account.
+    unit: Money in the budget's currency, two decimals.
+    source: calculated
+    source_detail: Calculated from cap, committed and reserved.
+    formula: |
+      remaining = cap - committed - reserved
+    formula_fn: budget_remaining
+    worked_example:
+      description: The Research Agent project budget.
+      inputs:
+        cap: 35,000.00 USD
+        committed: 14,000.00 USD
+        reserved: 1,750.00 USD
+      result: 19,250.00 USD
+    allowed_range: Any amount. Below zero it is shown as "Over cap by" the amount.
+    validation: Calculated only.
+    prd_ref: FR-04 (remaining budget)
+
+  budget.enforcing:
+    name: Limits spend
+    meaning: Whether this budget can stop spend. Only Hard limit and Approval budgets do.
+    unit: Yes or No.
+    source: calculated
+    source_detail: Calculated from the budget's policy.
+    formula: |
+      limits_spend = Yes when policy is Hard limit or Approval, otherwise No
+    formula_fn: budget_enforcing
+    worked_example:
+      description: The Research Agent project budget.
+      inputs:
+        policy: Approval
+      result: "Yes"
+    allowed_range: Yes or No.
+    validation: Calculated only.
+    prd_ref: FR-04 (monitor and soft-limit budgets never block)
+
+  budget.effective_remaining:
+    name: Effective remaining
+    meaning: What can still be spent here once parent limits are applied. It is the lowest remaining amount among this budget and the parents that limit it.
+    unit: Money in the budget's currency, two decimals. "No enforced limit" when no budget on the path limits spend.
+    source: calculated
+    source_detail: Calculated from this budget and its parents. The gateway uses the same function.
+    formula: |
+      path = this budget, then each parent while the budget below it is a Subdivision
+      remaining(x) = cap(x) - committed(x) - reserved(x)
+      effective_remaining = min over x in path, where x limits spend, of remaining(x)
+    formula_fn: budget_effective_remaining
+    worked_example:
+      description: The Research Agent project in the demo data. It has 19,250.00 USD of its own cap left, but the Engineering department has less, so Engineering sets the allowance. Northwind Labs is a soft limit and does not count.
+      inputs:
+        remaining(Research Agent, Approval): 19,250.00 USD
+        remaining(Agents, Approval): 18,750.00 USD
+        remaining(Engineering, Hard limit): 10,550.00 USD
+        remaining(Northwind Labs, Soft limit): not limiting
+      result: 10,550.00 USD
+    allowed_range: 0 or more, or "No enforced limit".
+    validation: Calculated only. Never shown below zero.
+    prd_ref: FR-04 (effective remaining allowance), UX-8 (subdivision warning)
+
+  vendor.id:
+    name: Vendor
+    meaning: The canonical identifier of a model vendor.
+    unit: Text, lower case.
+    source: seed script
+    source_detail: Registry table. Demo vendors are fictional.
+    worked_example:
+      description: The blocked vendor in the demo data.
+      result: vendor-b
+    allowed_range: Registered vendors only.
+    validation: Unique per tenant.
+    prd_ref: FR-18 (canonical registry)
+
+  vendor.status:
+    name: Status
+    meaning: Whether requests to this vendor are allowed. A blocked vendor blocks all of its models.
+    unit: Text. Allowed or Blocked.
+    source: user input
+    source_detail: Set by an administrator. Demo values come from the seed script.
+    worked_example:
+      description: vendor-b in the demo data.
+      result: Blocked
+    allowed_range: ALLOWED or BLOCKED. There is no third state.
+    validation: Any other value is rejected by the database.
+    prd_ref: FR-18 (vendor block overrides model allow), UX-3
+
+  registry.switch:
+    name: Allowed switch
+    meaning: Switching it off adds a block after you give a reason. Switching a block off again needs two administrators and is not available until phase 5.
+    unit: On (allowed) or off (blocked).
+    source: user input
+    source_detail: Administrator action in this screen.
+    worked_example:
+      description: The switch for vendor-b/model-1 in the demo data. It is locked because vendor-b is blocked.
+      result: Off, locked
+    allowed_range: On to off only in phase 1.
+    validation: A reason of 10 to 300 characters is required to block. A model under a blocked vendor cannot be switched.
+    prd_ref: FR-18 (emergency block one step, lift needs two administrators), UX-3, SD-03 (pending decision)
+
+  registry.last_change:
+    name: Last change
+    meaning: When the status last changed, who changed it and why.
+    unit: Date and time, ISO 8601, stored in UTC, shown as YYYY-MM-DD HH:MM:SS UTC. Then the actor and the reason.
+    source: system
+    source_detail: Recorded with every status change (table registry_changes).
+    worked_example:
+      description: The block on vendor-b in the demo data.
+      result: "2026-01-13 09:00:00 UTC, demo-admin: Contract review in progress. Blocked until legal sign-off."
+    allowed_range: Any past time.
+    validation: Written by the application together with the change, in one transaction.
+    prd_ref: UX-3 (who, when and why), FR-18 (registry changes are audited)
+
+  model.id:
+    name: Model
+    meaning: The canonical identifier of a model. Every alias resolves to exactly one of these.
+    unit: Text, lower case, vendor/model.
+    source: seed script
+    source_detail: Registry table. Demo models are fictional.
+    worked_example:
+      description: A model of the blocked vendor in the demo data.
+      result: vendor-b/model-1
+    allowed_range: Registered models only. An unregistered name is denied.
+    validation: Lower case with no surrounding spaces (database check).
+    prd_ref: FR-18 (canonical registry, default deny)
+
+  model.vendor:
+    name: Vendor
+    meaning: The vendor this model belongs to. The vendor's status applies to the model.
+    unit: Text, lower case.
+    source: seed script
+    source_detail: Registry table.
+    worked_example:
+      description: The vendor of vendor-b/model-1.
+      result: vendor-b
+    allowed_range: A registered vendor.
+    validation: Must exist in the vendor table (foreign key).
+    prd_ref: FR-18
+
+  model.aliases:
+    name: Aliases
+    meaning: Other names that resolve to this model. A block on the model or its vendor applies to every alias.
+    unit: Text, lower case.
+    source: seed script
+    source_detail: Alias table.
+    worked_example:
+      description: The alias of vendor-b/model-1 in the demo data.
+      result: vb-large
+    allowed_range: Each alias points to exactly one model.
+    validation: Lower case with no surrounding spaces. Unique per tenant.
+    prd_ref: FR-18 (alias resolution)
+
+  model.effective_status:
+    name: Status
+    meaning: Whether requests for this model are allowed right now, after the vendor's status is applied. A model is never shown as Allowed while its vendor is blocked.
+    unit: Text. Allowed, Blocked, or Blocked by vendor.
+    source: calculated
+    source_detail: Calculated from the vendor's status and the model's own setting.
+    formula: |
+      status = Blocked by vendor  when vendor_status is BLOCKED
+      status = Blocked            when model_status is BLOCKED
+      status = Allowed            when both are ALLOWED
+    formula_fn: model_effective_status
+    worked_example:
+      description: vendor-b/model-1 in the demo data. Its own setting is allowed, but vendor-b is blocked.
+      inputs:
+        model: vendor-b/model-1
+        vendor_status: BLOCKED
+        model_status: ALLOWED
+      result: Blocked by vendor vendor-b
+    allowed_range: Exactly one of the three.
+    validation: Calculated only.
+    prd_ref: FR-18 (vendor block overrides model allow), UX-3 (block cascade), SEC-05
+
+  model.input_price:
+    name: Input price
+    meaning: The price of 1,000 input tokens, used to estimate a request's cost before it is sent.
+    unit: Money per 1,000 tokens. Stored as micro-units, shown with up to six decimals.
+    source: seed script
+    source_detail: Registry table. Demo prices are invented.
+    worked_example:
+      description: vendor-b/model-1 in the demo data (2,500 micro-units).
+      result: 0.0025 USD
+    allowed_range: 0 or more.
+    validation: Whole micro-units, never negative.
+    prd_ref: FR-05 (estimate), v1.4 Section 2.5 (models table)
+
+  model.output_price:
+    name: Output price
+    meaning: The price of 1,000 output tokens, used to estimate a request's cost before it is sent.
+    unit: Money per 1,000 tokens. Stored as micro-units, shown with up to six decimals.
+    source: seed script
+    source_detail: Registry table. Demo prices are invented.
+    worked_example:
+      description: vendor-b/model-1 in the demo data (10,000 micro-units).
+      result: 0.01 USD
+    allowed_range: 0 or more.
+    validation: Whole micro-units, never negative.
+    prd_ref: FR-05 (estimate), v1.4 Section 2.5 (models table)
+
+  model.max_output_tokens:
+    name: Max output tokens
+    meaning: The most tokens the model can return in one response. It caps the cost estimate for a request.
+    unit: Whole number of tokens.
+    source: seed script
+    source_detail: Registry table.
+    worked_example:
+      description: vendor-b/model-1 in the demo data.
+      result: "8,192"
+    allowed_range: 1 or more.
+    validation: Must be greater than zero (database check).
+    prd_ref: FR-05 (estimate upper bound)
+
+  unregistered.name:
+    name: Requested name
+    meaning: A model name that was requested but that nobody has registered. Requests for it are denied.
+    unit: Text, as normalized (lower case, trimmed).
+    source: gateway
+    source_detail: Recorded by the gateway when it denies an unknown model (from phase 2). The demo row comes from the seed script.
+    worked_example:
+      description: The unregistered model in the demo data.
+      result: vendor-a/model-9
+    allowed_range: Names with no registry entry and no alias.
+    validation: Shown escaped. It never becomes a registry entry by itself.
+    prd_ref: UX-4 (blocked, denied and unregistered), FR-18 (default deny), D-03 (pending decision)
+
+  unregistered.seen_count:
+    name: Requests
+    meaning: How many requests asked for this name.
+    unit: Whole number.
+    source: gateway
+    source_detail: Counted by the gateway (from phase 2). The demo value comes from the seed script.
+    worked_example:
+      description: vendor-a/model-9 in the demo data.
+      result: "14"
+    allowed_range: 1 or more.
+    validation: Must be greater than zero (database check).
+    prd_ref: UX-4, D-03
+
+  unregistered.first_seen_at:
+    name: First seen
+    meaning: When this name was first requested.
+    unit: Date and time, ISO 8601, stored in UTC. Shown as YYYY-MM-DD HH:MM:SS UTC.
+    source: gateway
+    source_detail: Recorded by the gateway (from phase 2). The demo value comes from the seed script.
+    worked_example:
+      description: vendor-a/model-9 in the demo data.
+      result: "2026-01-12 09:00:00 UTC"
+    allowed_range: Any past time.
+    validation: Must carry a timezone. Stored as UTC.
+    prd_ref: UX-4, D-03
+
+  unregistered.last_seen_at:
+    name: Last seen
+    meaning: When this name was most recently requested.
+    unit: Date and time, ISO 8601, stored in UTC. Shown as YYYY-MM-DD HH:MM:SS UTC.
+    source: gateway
+    source_detail: Recorded by the gateway (from phase 2). The demo value comes from the seed script.
+    worked_example:
+      description: vendor-a/model-9 in the demo data.
+      result: "2026-01-15 08:00:00 UTC"
+    allowed_range: Any past time, not before First seen.
+    validation: Must carry a timezone. Stored as UTC.
+    prd_ref: UX-4, D-03
+
+  unregistered.register:
+    name: Action
+    meaning: Registers the name as a model so that it can be allowed or blocked. Not available until the gateway exists in phase 2.
+    unit: Button.
+    source: user input
+    source_detail: Administrator action in this screen.
+    worked_example:
+      description: The action for vendor-a/model-9 in the demo data.
+      result: Register model (disabled until phase 2)
+    allowed_range: One registration per name.
+    validation: Disabled in phase 1.
+    prd_ref: UX-4 (Unregistered offers "Register model")
+
+  block.impact:
+    name: Models that will be denied
+    meaning: Every model that requests will be refused for once this block is added.
+    unit: List of canonical model identifiers.
+    source: calculated
+    source_detail: Calculated from the registry. Blocking a vendor lists all of its models.
+    formula: |
+      blocking a vendor: affected = every model whose vendor is that vendor
+      blocking a model:  affected = that model
+    formula_fn: block_impact
+    worked_example:
+      description: Blocking vendor-a in the demo data.
+      inputs:
+        subject: vendor vendor-a
+      result: vendor-a/model-1, vendor-a/model-2, vendor-a/model-3
+    allowed_range: Zero or more registered models.
+    validation: Calculated only.
+    prd_ref: FR-18 (vendor block denies every model of that vendor), UX-7 (impact preview)
+
+  block.reason:
+    name: Reason
+    meaning: Why the block is being added. It is stored with the change and shown as the last change.
+    unit: Text, 10 to 300 characters.
+    source: user input
+    source_detail: Typed by the administrator who adds the block.
+    worked_example:
+      description: The reason recorded for the vendor-b block in the demo data.
+      result: Contract review in progress. Blocked until legal sign-off.
+    allowed_range: 10 to 300 characters after trimming.
+    validation: Required. Shorter or longer text is refused and nothing is changed.
+    prd_ref: FR-18 (every registry change is recorded with a reason), UX-3
