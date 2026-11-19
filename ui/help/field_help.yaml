@@ -1,0 +1,157 @@
+# The "i" information registry. Every field, column and KPI in the UI reads its
+# help text from here. Keys are stable field IDs: do not rename them.
+#
+# Tests (tests/system/test_field_help.py) fail when:
+#   - the UI shows a field that has no entry here,
+#   - an entry is missing its unit, or a calculated entry is missing its formula,
+#   - a worked example no longer matches what the code computes on the demo data.
+fields:
+  health.component:
+    name: Component
+    meaning: A part of KeepAir that must be running for the controls to work. Each one reports that it is alive by sending a heartbeat.
+    unit: Text. One of gateway, policy_sync, ledger, egress, alerting, data_sources.
+    source: system
+    source_detail: Fixed list defined in the application (keepair.health.COMPONENTS).
+    worked_example:
+      description: The first component in the health strip.
+      result: gateway
+    allowed_range: Only the six listed components.
+    validation: A heartbeat for any other component name is rejected.
+    prd_ref: UX-6 (health strip), FR-21 (heartbeats)
+
+  health.status:
+    name: Status
+    meaning: Whether a component is known to be working, judged by how recent its last heartbeat is. Unknown means there is no evidence either way, and it is never shown as healthy.
+    unit: Text. One of Healthy, Degraded, Failing, Unknown.
+    source: calculated
+    source_detail: Calculated on each page load from the last heartbeat and the current time.
+    formula: |
+      age_s = now - last_heartbeat_at
+      status = Unknown   when last_heartbeat_at is none, or age_s < 0
+      status = Healthy   when age_s <= degraded_after_s
+      status = Degraded  when age_s <= failing_after_s
+      status = Failing   otherwise
+    formula_fn: health_status
+    worked_example:
+      description: The gateway component in the demo data. No heartbeat has been recorded yet, so the status is Unknown.
+      inputs:
+        component: gateway
+        last_heartbeat_at: none
+        now: "2026-01-15T09:00:00Z"
+        degraded_after_s: "60"
+        failing_after_s: "180"
+      result: Unknown
+    allowed_range: Exactly one of the four states.
+    validation: A heartbeat dated in the future is not trusted and gives Unknown.
+    prd_ref: UX-6 (health strip), FR-21 (control assurance), SEC-37
+
+  health.last_heartbeat_at:
+    name: Last heartbeat
+    meaning: The last time the component reported that it is alive. "never" means no heartbeat has been received.
+    unit: Date and time, ISO 8601, stored in UTC. Shown as YYYY-MM-DD HH:MM:SS UTC.
+    source: system
+    source_detail: Written by each component when it sends a heartbeat (table heartbeats).
+    worked_example:
+      description: The gateway component in the demo data has not sent a heartbeat.
+      result: never
+    allowed_range: Any past time, or never.
+    validation: Must carry a timezone. Stored as UTC.
+    prd_ref: FR-21 (heartbeats), SEC-37
+
+  demo.placeholder_amount:
+    name: Placeholder amount
+    meaning: A sample amount with no business meaning, shown in phase 0 only. It proves that money is stored as whole micro-units and formatted in one place.
+    unit: USD. Stored as micro-units (1 USD = 1,000,000 micro-units). Shown with two decimals and the ISO 4217 code.
+    source: calculated
+    source_detail: The stored amount comes from the demo seed script. The displayed value is calculated from it.
+    formula: |
+      display_amount = amount_micro / 1,000,000
+      shown with two decimals, followed by currency
+    formula_fn: display_amount
+    worked_example:
+      description: The single placeholder record in the demo data.
+      inputs:
+        amount_micro: "2050000000"
+        currency: USD
+      result: 2,050.00 USD
+    allowed_range: 0 to 9,223,372,036,854,775,807 micro-units (a 64-bit integer).
+    validation: Must be a whole number of micro-units, zero or more. The currency must be a three-letter ISO 4217 code.
+    prd_ref: FR-02 (money as micro-units), Section 2.3 of the v1.4 build spec
+
+  demo.clock:
+    name: Demo data as of
+    meaning: The fixed moment the demo data set was generated for. It never changes, so the demo data is identical on every run.
+    unit: Date and time, ISO 8601, stored in UTC. Shown as YYYY-MM-DD HH:MM:SS UTC.
+    source: seed script
+    source_detail: Set by the demo seed script (keepair.demo.seed) together with a fixed random seed.
+    worked_example:
+      description: The value in the demo data.
+      result: "2026-01-15 09:00:00 UTC"
+    allowed_range: One fixed value per demo data set.
+    validation: Must carry a timezone. Stored as UTC.
+    prd_ref: Section 2.3 of the v1.4 build spec (injected clock and seed)
+
+  alert.raised_at:
+    name: Raised
+    meaning: When the failure was detected.
+    unit: Date and time, ISO 8601, stored in UTC. Shown as YYYY-MM-DD HH:MM:SS UTC.
+    source: system
+    source_detail: Set from the application clock when the failure is reported.
+    worked_example:
+      description: The demo data starts with no alerts. A database outage detected at the demo clock time would show this value.
+      result: "2026-01-15 09:00:00 UTC"
+    allowed_range: Any past time.
+    validation: Must carry a timezone. Stored as UTC.
+    prd_ref: FR-21 (failure visibility), SEC-36
+
+  alert.severity:
+    name: Severity
+    meaning: How urgent the alert is. SEV1 is the most urgent.
+    unit: Text. One of SEV1, SEV2, SEV3.
+    source: system
+    source_detail: Fixed per reason code in the application (keepair.failures.FAILURE_CODES).
+    worked_example:
+      description: A database outage (DATABASE_UNREACHABLE) is raised as SEV2.
+      result: SEV2
+    allowed_range: SEV1, SEV2 or SEV3.
+    validation: Any other value is rejected by the database.
+    prd_ref: FR-21 (alert severities), FR-22
+
+  alert.code:
+    name: Code
+    meaning: The stable reason code for the failure. Use it to search logs and runbooks.
+    unit: Text, upper case with underscores.
+    source: system
+    source_detail: Chosen from the registered list of failure codes when the failure is reported.
+    worked_example:
+      description: The code raised when the database cannot be reached.
+      result: DATABASE_UNREACHABLE
+    allowed_range: Only codes registered in the application.
+    validation: Reporting an unregistered code is refused.
+    prd_ref: SEC-36 (no silent failure), SEC-11 (stable reason codes)
+
+  alert.component:
+    name: Affected component
+    meaning: The part of KeepAir the failure belongs to.
+    unit: Text.
+    source: system
+    source_detail: Fixed per reason code in the application.
+    worked_example:
+      description: A database outage affects the ledger.
+      result: ledger
+    allowed_range: A health strip component, or app for the web application itself.
+    validation: Set by the application. It cannot be entered by a user.
+    prd_ref: FR-21 (failure visibility), UX-6
+
+  alert.message:
+    name: What happened
+    meaning: A plain-language description of the failure and its effect.
+    unit: Text.
+    source: system
+    source_detail: Written by the application when the failure is reported. It never contains request content or credentials.
+    worked_example:
+      description: The message for a database outage.
+      result: The database could not be reached. Component health and demo data cannot be read, so every component is shown as Unknown.
+    allowed_range: Free text written by the application.
+    validation: Escaped when shown. Never built from user input.
+    prd_ref: SEC-36 (no silent failure), SEC-34 (redaction)

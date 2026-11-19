@@ -1,0 +1,73 @@
+{% macro status_chip(status) %}
+<span class="status status--{{ status.value | lower }}"><span class="status__icon" aria-hidden="true">{{ {"Healthy": "✓", "Degraded": "!", "Failing": "×", "Unknown": "?"}[status.value] }}</span>{{ status.value }}</span>
+{%- endmacro %}
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{% endblock %} · KeepAir{% if demo_mode %} (demo){% endif %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  {% if demo_mode %}
+  <p class="demo-band" data-demo-label><strong>DEMO</strong> <span>Generated sample data. Nothing shown here is real spend.</span></p>
+  {% endif %}
+  <header class="top">
+    <a class="brand" href="/">KeepAir</a>
+    {% block health_strip %}{% endblock %}
+  </header>
+  <div class="frame">
+    <nav class="nav" aria-label="Main">
+      <ul>
+        {% for p in pages %}
+        <li><a href="{{ p.path }}"{% if current_slug is defined and p.slug == current_slug %} aria-current="page"{% endif %}>{{ p.title }}</a></li>
+        {% endfor %}
+      </ul>
+    </nav>
+    <main id="main" tabindex="-1">
+      {% block main %}{% endblock %}
+    </main>
+  </div>
+  <footer class="foot">
+    <p>All times are UTC. Money is shown in the currency it was recorded in.</p>
+    <p>KeepAir {{ version }}</p>
+  </footer>
+  {% for dom_id, entry in help.used() %}
+  <div id="{{ dom_id }}" class="help" popover role="note" aria-labelledby="{{ dom_id }}-title" data-help-id="{{ entry.id }}">
+    <h2 id="{{ dom_id }}-title">{{ entry.name }}</h2>
+    <p class="help__meaning">{{ entry.meaning }}</p>
+    <dl>
+      <dt>Unit and format</dt>
+      <dd data-help-part="unit">{{ entry.unit }}</dd>
+      <dt>Source</dt>
+      <dd data-help-part="source"><span class="tag">{{ entry.source }}</span> {{ entry.source_detail }}</dd>
+      <dt>Formula</dt>
+      {% if entry.formula %}
+      <dd data-help-part="formula"><pre>{{ entry.formula.strip() }}</pre></dd>
+      {% else %}
+      <dd data-help-part="formula">None. This value is recorded as it is, not calculated.</dd>
+      {% endif %}
+      <dt>Worked example</dt>
+      <dd data-help-part="example">
+        {{ entry.worked_example.description }}
+        {% if entry.worked_example.inputs %}
+        <pre>{% for key, value in entry.worked_example.inputs.items() %}{{ key }} = {{ value }}
+{% endfor %}result = {{ entry.worked_example.result }}</pre>
+        {% else %}
+        <pre>{{ entry.worked_example.result }}</pre>
+        {% endif %}
+      </dd>
+      <dt>Allowed range</dt>
+      <dd data-help-part="range">{{ entry.allowed_range }}</dd>
+      <dt>Validation</dt>
+      <dd data-help-part="validation">{{ entry.validation }}</dd>
+      <dt>PRD reference</dt>
+      <dd data-help-part="prd">{{ entry.prd_ref }}</dd>
+    </dl>
+  </div>
+  {% endfor %}
+</body>
+</html>
