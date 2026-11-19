@@ -1,0 +1,32 @@
+# Local demo stack: KeepAir + PostgreSQL 16. Development and demo only.
+# The database password below is a local default, not a secret. Real
+# deployments supply KEEPAIR_DATABASE_URL from their own secret store.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: keepair
+      POSTGRES_PASSWORD: ${KEEPAIR_DB_PASSWORD:-keepair}
+      POSTGRES_DB: keepair
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keepair -d keepair"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  app:
+    build: .
+    environment:
+      KEEPAIR_ENV: demo
+      KEEPAIR_DEMO_MODE: "true"
+      KEEPAIR_DATABASE_URL: postgresql+psycopg://keepair:${KEEPAIR_DB_PASSWORD:-keepair}@db:5432/keepair
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"
+    read_only: true
+    tmpfs:
+      - /tmp
