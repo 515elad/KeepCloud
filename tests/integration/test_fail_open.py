@@ -80,7 +80,7 @@ def test_fail_open_is_counted_alerted_and_audited(gw):
         "FAIL_OPEN",
         200,
     )
-    [usage] = gw.rows("SELECT * FROM usage_events")
+    [usage] = gw.rows("SELECT * FROM usage_events WHERE occurred_at >= '2026-01-15'")
     assert (usage.project, usage.actual_micros, usage.usage_known) == (
         "Ticket Triage",
         event.amount_micros,
@@ -212,7 +212,7 @@ def test_replay_is_idempotent(gw, monkeypatch):
     assert replay_module.replay(gw.engine, spool, gw.clock, seeded_rng(3)) == 0
     assert committed(gw) == after_first
     counts = gw.rows(
-        "SELECT (SELECT count(*) FROM fail_events), (SELECT count(*) FROM usage_events), (SELECT count(*) FROM gateway_decisions)"
+        "SELECT (SELECT count(*) FROM fail_events), (SELECT count(*) FROM usage_events WHERE occurred_at >= '2026-01-15'), (SELECT count(*) FROM gateway_decisions)"
     )[0]
     assert tuple(counts) == (4, 4, 4)
     total = gw.rows("SELECT sum(amount_micros) FROM fail_events")[0][0]

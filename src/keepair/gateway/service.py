@@ -325,7 +325,7 @@ class Gateway:
         except httpx.HTTPError:
             # Timeout or connection error after dispatch: the provider may have done the work.
             self._settle(reserved.reservation_id, principal, decision, None, None, known=False,
-                         final_state="UNKNOWN")  # fmt: skip
+                         price=(est.cost_micros, est.currency), final_state="UNKNOWN")  # fmt: skip
             self.reporter.report(
                 "UNKNOWN_USAGE",
                 f"No answer from {decision.vendor_id} for request {rid}. It was settled at the "
@@ -345,9 +345,10 @@ class Gateway:
             )
             return GatewayResponse(502, error_body("UPSTREAM_ERROR", rid), gateway_headers)
         if result.usage_known:
-            actual = convert(actual_cost(result.input_tokens, result.output_tokens, pricing), rate)
-            settled = self._settle(reserved.reservation_id, principal, decision,
-                                   result, actual, known=True)  # fmt: skip
+            priced = actual_cost(result.input_tokens, result.output_tokens, pricing)
+            actual = convert(priced, rate)
+            settled = self._settle(reserved.reservation_id, principal, decision, result, actual,
+                                   known=True, price=(priced, est.currency))  # fmt: skip
             if settled is not None and settled.overrun_micros > 0:
                 self.reporter.report(
                     "BUDGET_OVERRUN",
@@ -355,7 +356,8 @@ class Gateway:
                     "on the reservation.",
                 )
         else:
-            self._settle(reserved.reservation_id, principal, decision, result, None, known=False)
+            self._settle(reserved.reservation_id, principal, decision, result, None, known=False,
+                         price=(est.cost_micros, est.currency))  # fmt: skip
             self.reporter.report(
                 "UNKNOWN_USAGE",
                 f"{decision.vendor_id} answered request {rid} without usage figures. It was "
@@ -365,7 +367,7 @@ class Gateway:
         return GatewayResponse(200, result.body, gateway_headers)
 
     def _settle(self, reservation_id, principal, decision, result, actual, *, known,
-                final_state="SETTLED"):  # fmt: skip
+                price=None, final_state="SETTLED"):  # fmt: skip
         with self._ledger() as conn:
             settled = ledger.settle(
                 conn, reservation_id, clock=self.clock, actual_micros=actual,
@@ -390,6 +392,8 @@ class Gateway:
                     actual_micros=settled.actual_micros,
                     currency=settled.currency,
                     usage_known=known,
+                    price_micros=price[0] if price else None,
+                    price_currency=price[1] if price else None,
                     source="GATEWAY",
                     occurred_at=now,
                     ingested_at=now,
@@ -426,6 +430,8 @@ class Gateway:
             "model_id": decision.model_id,
             "vendor_id": decision.vendor_id,
             "estimate_micros": cost,
+            "price_estimate_micros": est.cost_micros,
+            "price_currency": est.currency,
             "price_version": est.price_version,
             "snapshot_version": decision.snapshot_version,
             "idempotency_key": key,
@@ -483,9 +489,11 @@ class Gateway:
             )
             return GatewayResponse(502, error_body("UPSTREAM_ERROR", rid), headers)
         if result.usage_known:
-            actual = convert(actual_cost(result.input_tokens, result.output_tokens, pricing), rate)
+            priced = actual_cost(result.input_tokens, result.output_tokens, pricing)
+            actual = convert(priced, rate)
             done = {
                 "actual_micros": actual,
+                "price_micros": priced,
                 "usage_known": True,
                 "input_tokens": result.input_tokens,
                 "output_tokens": result.output_tokens,

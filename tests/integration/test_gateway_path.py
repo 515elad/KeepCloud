@@ -62,6 +62,7 @@ def test_allowed_request_reserves_dispatches_and_settles(gw):
         actual,
     )
     assert (use.input_tokens, use.output_tokens) == mock_usage(messages, 256)
+    assert (use.price_micros, use.price_currency) == (actual, "USD")  # cost in the price currency
     [dec] = gw.rows("SELECT * FROM gateway_decisions WHERE id = :id", id=request_id)
     assert (dec.outcome, dec.reason_code, dec.http_status, dec.model_id) == (
         "ALLOWED",
@@ -141,7 +142,9 @@ def test_principal_ignores_client_headers(gw):
     assert after["Build Assistant"][0] > before["Build Assistant"][0]
     assert after["Ticket Triage"] == before["Ticket Triage"]
     assert after["Customer Operations"] == before["Customer Operations"]
-    [use] = gw.rows("SELECT project, team, agent FROM usage_events")
+    [use] = gw.rows(
+        "SELECT project, team, agent FROM usage_events WHERE occurred_at >= '2026-01-15'"
+    )
     assert tuple(use) == ("Build Assistant", "Platform", "build-assistant-agent")
 
 
@@ -328,7 +331,9 @@ def test_timeout_after_dispatch_settles_at_reserved_and_flags_unknown(gw, failur
         name
     ) in PATH_OF_BUILD_ASSISTANT:  # committed at the reserved amount; the reservation is closed
         assert after[name] == (before[name][0] + res.reserved_micros, before[name][1])
-    [use] = gw.rows("SELECT usage_known, input_tokens, actual_micros FROM usage_events")
+    [use] = gw.rows(
+        "SELECT usage_known, input_tokens, actual_micros FROM usage_events WHERE occurred_at >= '2026-01-15'"
+    )
     assert tuple(use) == (False, None, res.reserved_micros)
     assert gw.metrics.value("keepair_failures_total", code="UNKNOWN_USAGE") == 1
     assert gw.rows("SELECT 1 FROM alerts WHERE code = 'UNKNOWN_USAGE'")
@@ -480,6 +485,11 @@ def test_eur_budget_is_charged_in_eur_at_the_stored_rate(gw):
         "SELECT currency, fx_rate_micros FROM reservations WHERE credential_id IS NOT NULL"
     )
     assert tuple(res) == ("EUR", 920_000)
+    [use] = gw.rows(
+        "SELECT actual_micros, currency, price_micros, price_currency FROM usage_events "
+        "WHERE occurred_at >= '2026-01-15'"
+    )
+    assert tuple(use) == (eur, "EUR", usd, "USD")  # budget currency and price currency, both kept
     gw.execute("DELETE FROM fx_rates")
     gw.clock.advance(timedelta(seconds=6))  # rates travel with the policy snapshot (5 s)
     missing = gw.chat("Translation", "model-1")

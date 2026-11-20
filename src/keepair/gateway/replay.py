@@ -65,6 +65,8 @@ def replay_entry(conn, entry: Entry, clock: Clock, rng: Rng) -> bool:
     ).one_or_none()  # fmt: skip
     if inserted is None:
         return False
+    # The same cost in the price list's currency; the estimate when no answer was recorded.
+    price_micros = (done or {}).get("price_micros", d.get("price_estimate_micros")) if amount else 0
     path = [uuid.UUID(x) for x in d["budget_path"]]
     ledger._lock_budgets(conn, path)
     ledger._apply(conn, path, reserved_delta=0, committed_delta=amount)
@@ -75,7 +77,9 @@ def replay_entry(conn, entry: Entry, clock: Clock, rng: Rng) -> bool:
             project=d["project"], agent=d["agent"],
             input_tokens=done.get("input_tokens") if done else None,
             output_tokens=done.get("output_tokens") if done else None,
-            actual_micros=amount, currency=d["currency"], usage_known=known, source="GATEWAY",
+            actual_micros=amount, currency=d["currency"], usage_known=known,
+            price_micros=price_micros,
+            price_currency=d.get("price_currency"), source="GATEWAY",
             occurred_at=entry.opened_at, ingested_at=now,
         )
     )  # fmt: skip

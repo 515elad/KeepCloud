@@ -346,6 +346,10 @@ usage_events = Table(
     Column("actual_micros", BigInteger, nullable=False),
     Column("currency", String(3), nullable=False),
     Column("usage_known", Boolean, nullable=False),
+    # The same cost in the currency of the model's price list (phase 4), so that
+    # gateway estimates and provider bills are compared in one currency.
+    Column("price_micros", BigInteger),
+    Column("price_currency", String(3)),
     Column("source", Text, nullable=False),
     Column("occurred_at", DateTime(timezone=True), nullable=False),
     Column("ingested_at", DateTime(timezone=True), nullable=False),
@@ -406,4 +410,135 @@ fail_events = Table(
         name="fail_events_kind_check",
     ),
     CheckConstraint("amount_micros >= 0", name="fail_events_amount_check"),
+)
+
+# --- Phase 4: billing ingestion and allocation (FR-01, FR-02, FR-03) ----------
+
+ingestion_batches = Table(
+    "ingestion_batches",
+    metadata,
+    Column("id", Uuid, primary_key=True),
+    Column("tenant_id", Uuid, ForeignKey("tenants.id"), nullable=False),
+    Column("source", Text, nullable=False),
+    Column("file_name", Text, nullable=False),
+    Column("file_sha256", LargeBinary, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("rows_total", Integer, nullable=False),
+    Column("rows_new", Integer, nullable=False),
+    Column("rows_revised", Integer, nullable=False),
+    Column("rows_unchanged", Integer, nullable=False),
+    Column("reasons", JSONB, nullable=False),
+    Column("actor", Text, nullable=False),
+    Column("ingested_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint("status in ('LOADED','QUARANTINED')", name="ingestion_batches_status_check"),
+)
+
+# Raw records are append-only. A correction is a new revision; nothing is deleted.
+raw_billing_records = Table(
+    "raw_billing_records",
+    metadata,
+    Column("id", BigInteger, Identity(always=True), primary_key=True),
+    Column("tenant_id", Uuid, ForeignKey("tenants.id"), nullable=False),
+    Column("batch_id", Uuid, ForeignKey("ingestion_batches.id"), nullable=False),
+    Column("source", Text, nullable=False),
+    Column("record_key", Text, nullable=False),
+    Column("revision", Integer, nullable=False),
+    Column("payload", JSONB, nullable=False),
+    Column("payload_hash", LargeBinary, nullable=False),
+    Column("ingested_at", DateTime(timezone=True), nullable=False),
+    UniqueConstraint(
+        "tenant_id", "source", "record_key", "revision", name="raw_billing_records_key"
+    ),
+    CheckConstraint("revision >= 1", name="raw_billing_records_revision_check"),
+)
+
+normalized_cost_records = Table(
+    "normalized_cost_records",
+    metadata,
+    Column("id", Uuid, primary_key=True),
+    Column("tenant_id", Uuid, ForeignKey("tenants.id"), nullable=False),
+    Column("raw_id", BigInteger, ForeignKey("raw_billing_records.id"), nullable=False),
+    Column("source", Text, nullable=False),
+    Column("record_key", Text, nullable=False),
+    Column("revision", Integer, nullable=False),
+    Column("is_current", Boolean, nullable=False),
+    Column("provider", Text, nullable=False),
+    Column("model_id", Text, nullable=False),
+    Column("charge_date", Date, nullable=False),
+    Column("billing_period", Date, nullable=False),
+    Column("billed_micros", BigInteger, nullable=False),
+    Column("currency", String(3), nullable=False),
+    Column("finalization_state", Text, nullable=False),
+    Column("consumed_quantity", BigInteger, nullable=False),
+    Column("consumed_unit", Text, nullable=False),
+    Column("tags", JSONB, nullable=False),
+    UniqueConstraint(
+        "tenant_id", "source", "record_key", "revision", name="normalized_cost_records_key"
+    ),
+    # A billing record is never an estimate (FR-07).
+    CheckConstraint(
+        "finalization_state in ('PROVIDER_REPORTED','INVOICED')",
+        name="normalized_cost_records_state_check",
+    ),
+    CheckConstraint("billed_micros >= 0", name="normalized_cost_records_amount_check"),
+)
+
+allocation_rules = Table(
+    "allocation_rules",
+    metadata,
+    Column("id", Uuid, primary_key=True),
+    Column("tenant_id", Uuid, ForeignKey("tenants.id"), nullable=False),
+    Column("name", Text, nullable=False),
+    Column("priority", Integer, nullable=False),
+    Column("effective_from", Date, nullable=False),
+    Column("effective_to", Date),
+    Column("match", JSONB, nullable=False),
+    Column("split", JSONB, nullable=False),
+    Column("version", Integer, nullable=False, server_default=text("1")),
+)
+
+manual_allocations = Table(
+    "manual_allocations",
+    metadata,
+    Column("tenant_id", Uuid, primary_key=True),
+    Column("source", Text, primary_key=True),
+    Column("record_key", Text, primary_key=True),
+    Column("project_id", Uuid, ForeignKey("projects.id"), nullable=False),
+    Column("actor", Text, nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("assigned_at", DateTime(timezone=True), nullable=False),
+)
+
+allocation_facts = Table(
+    "allocation_facts",
+    metadata,
+    Column("id", BigInteger, Identity(always=True), primary_key=True),
+    Column("tenant_id", Uuid, ForeignKey("tenants.id"), nullable=False),
+    Column("record_id", Uuid, ForeignKey("normalized_cost_records.id"), nullable=False),
+    Column("project_id", Uuid, ForeignKey("projects.id")),
+    Column("amount_micros", BigInteger, nullable=False),
+    Column("currency", String(3), nullable=False),
+    Column("state", Text, nullable=False),
+    Column("confidence", Text),
+    Column("join_confidence", Integer, nullable=False),
+    Column("rule_id", Uuid),
+    Column("rule_version", Integer),
+    Column("explanation", Text, nullable=False),
+    Column("is_current", Boolean, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint(
+        "state in ('ALLOCATED','REVIEW','UNMATCHED','UNALLOCATED')",
+        name="allocation_facts_state_check",
+    ),
+    CheckConstraint(
+        "confidence is null or confidence in ('DIRECT','INFERRED','MANUAL')",
+        name="allocation_facts_confidence_check",
+    ),
+    CheckConstraint("join_confidence between 0 and 100", name="allocation_facts_join_check"),
+    # Allocated or under review means a project and a confidence; otherwise neither.
+    CheckConstraint(
+        "(state in ('ALLOCATED','REVIEW')) = (project_id is not null and confidence is not null)",
+        name="allocation_facts_shape_check",
+    ),
+    Index("allocation_facts_current_idx", "tenant_id", "is_current"),
 )

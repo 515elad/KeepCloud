@@ -19,7 +19,8 @@ from dataclasses import dataclass
 import httpx
 
 from keepair.config import Settings
-from keepair.demo.seed import _tree, agent_name, demo_token
+from keepair.demo.seed import agent_name, demo_token
+from keepair.demo.tree import demo_tree
 from keepair.rng import DEMO_SEED, seeded_rng
 
 TOTAL = 500
@@ -56,7 +57,7 @@ class Planned:
 
 
 def _project_names() -> list[str]:
-    org, _ = _tree()
+    org, _ = demo_tree()
     names: list[str] = []
 
     def walk(node) -> None:

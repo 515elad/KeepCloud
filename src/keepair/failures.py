@@ -44,6 +44,9 @@ FAILURE_CODES: dict[str, tuple[str, str]] = {
     "SPOOL_FULL": ("SEV2", "gateway"),
     "SPOOL_WRITE_FAILED": ("SEV2", "gateway"),
     "SPOOL_CORRUPT": ("SEV2", "gateway"),
+    # Spend data (phase 4)
+    "INGEST_QUARANTINED": ("SEV3", "data_sources"),
+    "UNCONTROLLED_SPEND": ("SEV2", "gateway"),
 }
 
 _MEMORY_LIMIT = 100

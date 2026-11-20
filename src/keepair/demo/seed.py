@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import Connection, Engine, func, insert, select, text
@@ -19,12 +18,15 @@ from sqlalchemy import Connection, Engine, func, insert, select, text
 from keepair.clock import Clock, FixedClock, to_iso
 from keepair.config import Settings
 from keepair.db import make_engine
+from keepair.demo.tree import Node, demo_tree
+from keepair.demo.usage_plan import usage_plan
 from keepair.gateway.tokens import generate_token, hash_token
 from keepair.ids import uuid7
 from keepair.money import MICRO_PER_UNIT
 from keepair.rng import DEMO_SEED, seeded_rng
 from keepair.schema import (
     agents,
+    allocation_rules,
     app_meta,
     budgets,
     fx_rates,
@@ -38,6 +40,7 @@ from keepair.schema import (
     reservations,
     tenants,
     unregistered_models,
+    usage_events,
     vendor_endpoints,
     vendors,
 )
@@ -49,71 +52,6 @@ SEEDED_RESERVATION_EXPIRY = datetime(2099, 1, 1, tzinfo=UTC)
 
 def demo_clock() -> FixedClock:
     return FixedClock(DEMO_CLOCK_AT)
-
-
-@dataclass
-class Node:
-    """One scope with its budget. Amounts are whole currency units."""
-
-    kind: str
-    name: str
-    policy: str
-    cap: int
-    mode: str = "SUBDIVISION"
-    committed: int = 0  # spend recorded directly on this scope
-    reserved: int = 0
-    extra_micros: int = 0  # extra committed spend below one whole unit
-    children: list[Node] = field(default_factory=list)
-    direct_reserved: int = 0
-
-
-def _tree() -> tuple[Node, dict[str, tuple[str, str, date]]]:
-    """The demo hierarchy, and (currency, period, period_start) per department subtree."""
-    p = lambda name, policy, cap, committed, reserved, mode="SUBDIVISION": Node(  # noqa: E731
-        "PROJECT", name, policy, cap, mode, committed, reserved
-    )
-    org = Node("ORG", "Northwind Labs", "SOFT", 220_000, "INDEPENDENT", children=[
-        Node("DEPT", "Engineering", "HARD", 120_000, children=[
-            Node("TEAM", "Platform", "HARD", 70_000, committed=18_000, children=[
-                p("Build Assistant", "HARD", 40_000, 22_000, 1_200),
-                p("Log Summarizer", "SOFT", 30_000, 26_400, 600),
-            ]),
-            Node("TEAM", "Agents", "APPROVAL", 60_000, children=[
-                p("Research Agent", "APPROVAL", 35_000, 14_000, 1_750),
-                p("Code Review Agent", "HARD", 30_000, 24_300, 1_200),
-            ]),
-        ]),
-        Node("DEPT", "Customer Operations", "SOFT", 60_000, children=[
-            Node("TEAM", "Support Automation", "SOFT", 35_000, children=[
-                p("Ticket Triage", "SOFT", 20_000, 12_400, 400),
-                p("Reply Drafts", "MONITOR", 15_000, 5_250, 150),
-            ]),
-            Node("TEAM", "Sales Assist", "MONITOR", 20_000, children=[
-                p("Lead Scoring", "MONITOR", 12_000, 2_400, 120),
-                p("Call Notes", "MONITOR", 6_000, 7_080, 0, mode="INDEPENDENT"),
-            ]),
-        ]),
-        Node("DEPT", "Research Europe", "HARD", 80_000, "INDEPENDENT", children=[
-            Node("TEAM", "Language Models", "HARD", 50_000, children=[
-                p("Translation", "HARD", 30_000, 15_000, 1_200),
-                # 0.15 EUR left: the demo traffic exhausts this hard limit.
-                Node("PROJECT", "Summaries EU", "HARD", 25_000, committed=23_499, reserved=1_500,
-                     extra_micros=850_000),
-            ]),
-            Node("TEAM", "Evaluation", "MONITOR", 15_000, "INDEPENDENT", children=[
-                p("Benchmark Runs", "MONITOR", 10_000, 4_500, 0),
-                p("Red Team", "SOFT", 5_000, 3_500, 100),
-            ]),
-        ]),
-    ])  # fmt: skip
-    month, quarter = ("MONTH", date(2026, 1, 1)), ("QUARTER", date(2026, 1, 1))
-    terms = {
-        "Northwind Labs": ("USD", *month),
-        "Engineering": ("USD", *month),
-        "Customer Operations": ("USD", *month),
-        "Research Europe": ("EUR", *quarter),
-    }
-    return org, terms
 
 
 def _roll_up(node: Node) -> tuple[int, int, int]:
@@ -195,7 +133,7 @@ def seed(
         ],
     )
 
-    org, terms = _tree()
+    org, terms = demo_tree()
     _roll_up(org)
 
     open_reservations: list[dict] = []
@@ -366,6 +304,50 @@ def seed(
             source="demo (invented rate)",
         )
     )  # fmt: skip
+    # Gateway usage history (estimates) for 1 to 14 January, matching the budgets' committed
+    # amounts. The demo billing files are generated from the same plan.
+    agent_ids = dict(conn.execute(select(agents.c.name, agents.c.id)).all())
+    conn.execute(
+        insert(usage_events),
+        [
+            {
+                "id": uuid7(clock, rng),
+                "tenant_id": tenant_id,
+                "provider": "vendor-a",
+                "model_id": row.model,
+                "agent_id": agent_ids.get(agent_name(row.project)) if row.project else None,
+                "team": row.team,
+                "project": row.project,
+                "agent": agent_name(row.project) if row.project else None,
+                "input_tokens": row.price_micros // 30,
+                "output_tokens": row.price_micros // 60,
+                "actual_micros": row.cost_micros,
+                "currency": row.currency,
+                "usage_known": True,
+                "price_micros": row.price_micros,
+                "price_currency": "USD",
+                "source": "GATEWAY",
+                "occurred_at": datetime(row.day.year, row.day.month, row.day.day, 12, tzinfo=UTC),
+                "ingested_at": datetime(row.day.year, row.day.month, row.day.day, 12, tzinfo=UTC),
+            }
+            for row in usage_plan(seed_value)
+        ],
+    )
+    # One allocation rule: shared platform cost is split between the team's two projects.
+    conn.execute(
+        insert(allocation_rules).values(
+            id=uuid7(clock, rng),
+            tenant_id=tenant_id,
+            name="Platform shared cost",
+            priority=10,
+            effective_from=date(2026, 1, 1),
+            match={"project": "shared-platform"},
+            split=[
+                {"project": "Build Assistant", "weight_bp": 6000},
+                {"project": "Log Summarizer", "weight_bp": 4000},
+            ],
+        )
+    )
     conn.execute(
         insert(unregistered_models).values(
             tenant_id=tenant_id,
