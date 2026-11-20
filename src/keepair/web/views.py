@@ -23,6 +23,7 @@ from keepair.schema import (
     projects,
     registry_changes,
     unregistered_models,
+    users,
     vendors,
 )
 from keepair.web.formatting import (
@@ -79,6 +80,7 @@ class BudgetRow:
     limited_by: str | None
     overcommit_text: str | None
     coverage: Coverage | None
+    owner: str | None = None  # display name of the accountable owner, if active
     path: list[PathRow] = field(default_factory=list)
     children: list[tuple[uuid.UUID, str]] = field(default_factory=list)
     parent: tuple[uuid.UUID, str] | None = None
@@ -148,6 +150,14 @@ def load_budget_rows(
         r.id: r for r in conn.execute(select(projects).where(projects.c.tenant_id == tenant_id))
     }
 
+    owners = dict(
+        conn.execute(
+            select(budgets.c.id, users.c.display_name)
+            .select_from(budgets.join(users, users.c.id == budgets.c.owner_user_id))
+            .where(budgets.c.tenant_id == tenant_id, users.c.status == "ACTIVE")
+        ).all()
+    )
+
     def name_of(b: B.Budget) -> str:
         return names.get(b.scope_id, "Unnamed scope")
 
@@ -200,6 +210,7 @@ def load_budget_rows(
                 limited_by=limited_by,
                 overcommit_text=format_money(over, b.currency) if over else None,
                 coverage=coverage,
+                owner=owners.get(b.id),
                 path=[
                     PathRow(
                         id=x.id,
@@ -342,6 +353,7 @@ REASON_TEXT = {
     "UNKNOWN_MODEL": "The model is not registered",
     "VENDOR_ROUTE_MISMATCH": "The model does not belong to the vendor in the address",
     "SNAPSHOT_STALE": "Policy could not be refreshed, so every request is refused",
+    "KILL_SWITCH": "A kill switch is on for this traffic",
     "BUDGET_EXHAUSTED": "The budget has no room for this request",
     "NO_BUDGET": "The project has no budget",
     "FX_RATE_MISSING": "No exchange rate for the budget's currency",

@@ -79,7 +79,7 @@ def test_banner_stays_after_recovery_until_acknowledged(ui_traffic):
     [row] = ui.gw.rows(
         "SELECT count(*), min(acknowledged_by) FROM fail_events WHERE acknowledged_at IS NOT NULL"
     )
-    assert tuple(row) == (3, "demo-operator")
+    assert tuple(row) == (3, "alice.admin")
 
 
 @pytest.mark.req("FR-12 (fail-open activity report)")
@@ -135,7 +135,7 @@ def test_fail_open_report_matches_fail_events(ui_traffic):
     assert "Build Assistant" not in soup.select_one("table[data-table=fail-open]").get_text()
     ui.client.post("/gateway/fail-open/acknowledge", headers=ORIGIN)
     after = ui.soup("/gateway/fail-open")
-    assert "demo-operator" in after.select_one("table[data-table=fail-open]").get_text()
+    assert "alice.admin" in after.select_one("table[data-table=fail-open]").get_text()
     assert (
         after.select_one('[data-field-id="failopen.unacknowledged"] dd').get_text(strip=True) == "0"
     )
@@ -153,7 +153,8 @@ def test_banner_is_shown_even_when_the_ui_cannot_read_its_database(
     ui = make_ui(
         settings, unreachable_engine, gateway_client=gw.client
     )  # the UI's database is gone
-    soup = ui.soup("/budgets")
+    # Nobody can be signed in without the database, so the outage page is shown (503).
+    soup = ui.soup("/budgets", status=503)
     assert "database cannot be reached" in soup.select_one(".notice--bad").get_text()
     b = soup.select_one("[data-fail-open-banner]")
     assert (

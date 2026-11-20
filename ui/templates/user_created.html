@@ -1,0 +1,22 @@
+{% extends "page.html" %}
+{% block title %}Sign-in details{% endblock %}
+{% block heading %}
+<p class="crumbs"><a href="/admin#users-title">Admin</a></p>
+<h1>Sign-in details for <code>{{ created.username }}</code></h1>
+{% endblock %}
+{% block content %}
+<section aria-labelledby="secrets-title">
+  <h2 id="secrets-title">Hand these over now</h2>
+  <p class="notice notice--warn" role="status"><span aria-hidden="true">!</span> This is the only time they are shown. KeepAir keeps a hash of the password and an encrypted copy of the authenticator secret. If they are lost, reset the user's sign-in.</p>
+  <div class="token" data-kpi data-field-id="user.initial_password">
+    <p>{{ help.name("user.initial_password") }} {{ help.button("user.initial_password") }}</p>
+    <pre data-initial-password tabindex="0">{{ created.password }}</pre>
+  </div>
+  <div class="token" data-kpi data-field-id="user.totp_secret">
+    <p>{{ help.name("user.totp_secret") }} {{ help.button("user.totp_secret") }}</p>
+    <pre data-totp-secret tabindex="0">{{ created.totp_secret }}</pre>
+  </div>
+  <p>The account was {{ what }}. The user types the secret into an authenticator app (time-based, 6 digits, 30 seconds, SHA-1).</p>
+  <p><a href="/admin#users-title">Back to Admin</a></p>
+</section>
+{% endblock %}

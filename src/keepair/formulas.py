@@ -16,6 +16,7 @@ from datetime import date
 
 from sqlalchemy import Connection, func, select
 
+from keepair import approvals, audit, killswitch
 from keepair import budgets as B
 from keepair.billing.ingest import ingest
 from keepair.clock import Clock, to_iso
@@ -23,8 +24,8 @@ from keepair.coverage import coverage_state
 from keepair.demo import billing as demo_billing
 from keepair.health import COMPONENTS, health_status
 from keepair.rng import DEMO_SEED, seeded_rng
-from keepair.schema import app_meta, heartbeats, normalized_cost_records, projects
-from keepair.web import spend_views, views
+from keepair.schema import app_meta, budgets, heartbeats, normalized_cost_records, projects, users
+from keepair.web import control_views, spend_views, views
 from keepair.web.formatting import format_money
 
 EXAMPLE_PROJECT = "Research Agent"
@@ -351,6 +352,82 @@ def _recon_finding(conn: Connection, clock: Clock) -> Evaluated:
     return Evaluated(inputs, f"Uncontrolled, {row.uncontrolled_text}")
 
 
+# --- Phase 5 and 6 ------------------------------------------------------------------
+
+EXAMPLE_OWNER = "omar.owner"
+EXAMPLE_REQUESTER = "alice.admin"
+
+
+def _unowned_spend(conn: Connection, clock: Clock) -> Evaluated:
+    found = control_views.unowned(conn, _tenant(conn), date(2026, 1, 1))
+    return Evaluated(
+        {"period": "2026-01", "scopes_without_owner": ", ".join(n for _, n in found.budgets)},
+        found.text,
+    )
+
+
+def _unowned_budgets(conn: Connection, clock: Clock) -> Evaluated:
+    tenant = _tenant(conn)
+    total = conn.execute(
+        select(func.count()).select_from(budgets).where(budgets.c.tenant_id == tenant)
+    ).scalar_one()
+    _, missing = control_views.owned_scope_names(conn, tenant)
+    return Evaluated(
+        {"budgets": str(total), "with_active_owner": str(total - len(missing))}, str(len(missing))
+    )
+
+
+def _user_owns(conn: Connection, clock: Clock) -> Evaluated:
+    class Nobody:
+        id = None
+
+    rows = control_views.user_rows(conn, clock, _tenant(conn), Nobody)
+    row = next(r for r in rows if r.username == EXAMPLE_OWNER)
+    return Evaluated({"user": row.username}, str(row.owns))
+
+
+def _kill_impact(conn: Connection, clock: Clock) -> killswitch.Impact:
+    return killswitch.preview(conn, _tenant(conn), "GLOBAL", "", clock.now())
+
+
+def _kill_projects(conn: Connection, clock: Clock) -> Evaluated:
+    impact = _kill_impact(conn, clock)
+    return Evaluated({"scope": impact.scope_name}, str(impact.projects))
+
+
+def _kill_agents(conn: Connection, clock: Clock) -> Evaluated:
+    impact = _kill_impact(conn, clock)
+    return Evaluated({"scope": impact.scope_name}, str(impact.agents))
+
+
+def _kill_requests(conn: Connection, clock: Clock) -> Evaluated:
+    impact = _kill_impact(conn, clock)
+    return Evaluated({"scope": impact.scope_name, "now": to_iso(clock.now())},
+                     str(impact.requests_5m))  # fmt: skip
+
+
+def _approval_eligible(conn: Connection, clock: Clock) -> Evaluated:
+    tenant = _tenant(conn)
+    admins = conn.execute(
+        select(users.c.id, users.c.username)
+        .where(users.c.tenant_id == tenant, users.c.role == "ADMIN", users.c.status == "ACTIVE")
+        .order_by(users.c.username)
+    ).all()
+    requester = next(a.id for a in admins if a.username == EXAMPLE_REQUESTER)
+    return Evaluated(
+        {"requested_by": EXAMPLE_REQUESTER,
+         "active_administrators": ", ".join(a.username for a in admins)},
+        ", ".join(approvals.eligible_approvers(conn, tenant, requester)),
+    )  # fmt: skip
+
+
+def _audit_verify(conn: Connection, clock: Clock) -> Evaluated:
+    result = audit.verify(conn)
+    return Evaluated(
+        {"records": str(result.checked)}, "Chain verified" if result.ok else "Chain broken"
+    )
+
+
 FORMULAS: dict[str, Callable[[Connection, Clock], Evaluated]] = {
     "health_status": _health_status,
     "coverage_state": _coverage_state,
@@ -385,4 +462,12 @@ FORMULAS: dict[str, Callable[[Connection, Clock], Evaluated]] = {
     "recon_findings": _recon_findings,
     "recon_share": _recon_share,
     "recon_finding": _recon_finding,
+    "unowned_spend": _unowned_spend,
+    "unowned_budgets": _unowned_budgets,
+    "user_owns": _user_owns,
+    "kill_impact_projects": _kill_projects,
+    "kill_impact_agents": _kill_agents,
+    "kill_impact_requests": _kill_requests,
+    "approval_eligible": _approval_eligible,
+    "audit_verify": _audit_verify,
 }

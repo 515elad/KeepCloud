@@ -29,10 +29,7 @@ PAGES: tuple[Page, ...] = (
         "overview",
         "Overview",
         "Where spend stands, what is unowned, and whether the controls are working.",
-        (
-            Section("Unowned spend bucket", 5, ("FR-17",)),
-            Section("Forecast and anomaly alerts", None, ("FR-08",)),
-        ),
+        (Section("Forecast and anomaly alerts", None, ("FR-08",)),),
     ),
     Page(
         "spend",
@@ -46,23 +43,20 @@ PAGES: tuple[Page, ...] = (
     Page(
         "budgets",
         "Budgets",
-        "The budget hierarchy, each budget's cap, and what is left after parent limits.",
-        (Section("Owner assignment", 5, ("FR-17",)),),
+        "The budget hierarchy, each budget's cap and owner, and what is left after parent limits.",
+        (Section("Creating budgets and changing caps", None, ("FR-04",)),),
     ),
     Page(
         "gateway",
         "Gateway",
         "Which vendors and models are allowed, and what the gateway denied and why.",
-        (Section("Held requests: approve or reject", 5, ("FR-11", "UX-11")),),
+        (Section("Streaming responses", None, ("FR-05",)),),
     ),
     Page(
         "approvals",
         "Approvals",
         "Held requests and actions that are waiting for a second person.",
-        (
-            Section("HELD queue", 5, ("FR-11", "UX-11")),
-            Section("Two-person pending items", 5, ("FR-18", "SEC-15")),
-        ),
+        (Section("Approval chains and delegation", None, ("FR-11",)),),
     ),
     Page(
         "reconciliation",
@@ -76,23 +70,20 @@ PAGES: tuple[Page, ...] = (
     Page(
         "reports",
         "Reports",
-        "Showback reports and exports.",
-        (Section("Showback report and CSV export", 6, ("FR-12", "SEC-29")),),
+        "Showback by project, with a download.",
+        (Section("Scheduled reports and chargeback to a finance system", None, ("FR-12",)),),
     ),
     Page(
         "admin",
         "Admin",
         "Users, roles and emergency controls.",
-        (
-            Section("Users, roles and MFA", 5, ("FR-13", "FR-17")),
-            Section("Kill switch", 5, ("FR-22", "UX-7")),
-        ),
+        (Section("Single sign-on and user provisioning", None, ("FR-13",)),),
     ),
     Page(
         "audit-log",
         "Audit log",
         "Every administrative action, in a chain that shows tampering.",
-        (Section("Audit log viewer and chain verification", 6, ("FR-12", "SEC-31", "SEC-32")),),
+        (Section("Signed chain head stored outside the database", None, ("SEC-32",)),),
     ),
 )
 PAGES_BY_SLUG = {p.slug: p for p in PAGES}

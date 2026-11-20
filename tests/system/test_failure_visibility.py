@@ -17,7 +17,10 @@ pytestmark = pytest.mark.req("SEC-36", "FR-21", "Hard rule 5")
 
 def inject_database_unreachable(settings, engine, unreachable_engine, monkeypatch):
     ui = make_ui(settings, unreachable_engine)
-    assert ui.client.get("/budgets").status_code == 200
+    # Nobody can be signed in without the database: the outage page is shown, and it
+    # carries this failure's alert.
+    assert ui.client.get("/budgets").status_code == 503
+    ui.overview_status = 503
     return ui
 
 
@@ -212,7 +215,28 @@ def inject_uncontrolled_spend(settings, engine, unreachable_engine, monkeypatch)
     return ui
 
 
+def inject_account_locked(settings, engine, unreachable_engine, monkeypatch):
+    ui = make_ui(settings, engine)
+    visitor = ui.anonymous()
+    for _ in range(5):
+        answer = visitor.post("/login", {"username": "bob.admin", "password": "wrong-password"})
+        assert answer.status_code == 401
+    return ui
+
+
+def inject_audit_chain_broken(settings, engine, unreachable_engine, monkeypatch):
+    from keepair.demo.tamper import tamper
+
+    ui = make_ui(settings, engine)
+    with engine.begin() as conn:
+        tamper(conn)
+    assert ui.post("/audit-log/verify").status_code == 409
+    return ui
+
+
 INJECTORS = {
+    "ACCOUNT_LOCKED": inject_account_locked,
+    "AUDIT_CHAIN_BROKEN": inject_audit_chain_broken,
     "INGEST_QUARANTINED": inject_ingest_quarantined,
     "UNCONTROLLED_SPEND": inject_uncontrolled_spend,
     "FAIL_OPEN": gateway_failure(_fail_open),
@@ -249,7 +273,8 @@ def test_every_fail_path_emits_metric_alert_and_ui_row(
     assert f'{FAILURES_TOTAL}{{code="{code}"}}' in metrics_client.get("/metrics").text
 
     # 2 and 3. Alert record, shown as a row in the UI.
-    row = ui.soup("/").select_one(f'table[data-table=alerts] tr[data-alert-code="{code}"]')
+    overview = ui.soup("/", status=getattr(ui, "overview_status", 200))
+    row = overview.select_one(f'table[data-table=alerts] tr[data-alert-code="{code}"]')
     assert row is not None, "no alert row in the UI"
     cells = [td.get_text(" ", strip=True) for td in row.find_all("td")]
     assert severity in cells[1] and cells[2] == code and cells[3] == component
@@ -257,7 +282,7 @@ def test_every_fail_path_emits_metric_alert_and_ui_row(
 
 
 def test_database_outage_shows_unknown_health_and_a_visible_notice(ui_db_down):
-    soup = ui_db_down.soup("/")
+    soup = ui_db_down.soup("/", status=503)
     assert {c.get_text(strip=True) for c in soup.select(".health .status")} == {"?Unknown"}
     assert "database cannot be reached" in soup.select_one(".notice--bad").get_text()
     assert "Not loaded" in soup.select_one('[data-field-id="demo.clock"]').get_text()

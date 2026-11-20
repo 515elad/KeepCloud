@@ -89,3 +89,36 @@
   };
   window.setInterval(check, 4000);
 })();
+
+// Demo mode: keep the authenticator code shown next to a code input current, so a
+// second sensitive action does not need a reload (which would clear what was typed).
+(() => {
+  "use strict";
+  const spots = document.querySelectorAll(".demo-code");
+  if (!spots.length) return;
+  const show = (spot, code) => {
+    const label = document.createElement("strong");
+    label.textContent = "DEMO";
+    spot.replaceChildren(label, " ");
+    if (code) {
+      const shown = document.createElement("code");
+      shown.textContent = code;
+      spot.append("Your authenticator would show ", shown, " now.");
+      spot.dataset.demoCode = code;
+    } else {
+      spot.append("The next code is not valid yet. It appears here in a few seconds.");
+      delete spot.dataset.demoCode;
+    }
+  };
+  const refresh = async () => {
+    try {
+      const response = await fetch("/api/demo-code", { cache: "no-store" });
+      if (!response.ok) return;
+      const { code } = await response.json();
+      spots.forEach((spot) => { if (spot.dataset.demoCode !== (code || undefined)) show(spot, code); });
+    } catch (error) {
+      // The UI server did not answer; the next round tries again.
+    }
+  };
+  window.setInterval(refresh, 3000);
+})();

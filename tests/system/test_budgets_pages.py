@@ -161,8 +161,9 @@ def test_unknown_budget_is_a_404_page(ui, bad):
 
 @pytest.mark.req("SEC-36", "UX-10 (states)")
 def test_budget_pages_say_so_when_the_database_is_down(ui_db_down):
-    soup = ui_db_down.soup("/budgets")
+    # Without the database nobody can be signed in: every page is the outage page (503).
+    soup = ui_db_down.soup("/budgets", status=503)
     assert "database cannot be reached" in soup.select_one(".notice--bad").get_text()
     assert not soup.select("table[data-table=budgets]")
-    detail = ui_db_down.soup(f"/budgets/{uuid.UUID(int=5)}")
+    detail = ui_db_down.soup(f"/budgets/{uuid.UUID(int=5)}", status=503)
     assert "database cannot be reached" in detail.select_one(".notice--bad").get_text()

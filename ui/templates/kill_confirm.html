@@ -1,0 +1,30 @@
+{% extends "page.html" %}
+{% block title %}Kill switch{% endblock %}
+{% block heading %}
+<p class="crumbs"><a href="/admin#kill-title">Admin</a></p>
+<h1>Switch on the kill switch for {{ impact.scope_name }}</h1>
+{% endblock %}
+{% block content %}
+<section aria-labelledby="impact-title">
+  <h2 id="impact-title">What this stops</h2>
+  <p class="hint">The gateway refuses every request in scope with <code class="reason-code">KILL_SWITCH</code>, within 5 seconds, also for approved requests and while the ledger is down. Switching it off later needs a second administrator.</p>
+  <dl class="kpis" data-impact>
+    <div data-kpi data-field-id="kill.impact_projects"><dt>{{ help.name("kill.impact_projects") }} {{ help.button("kill.impact_projects") }}</dt><dd class="num">{{ impact.projects }}</dd></div>
+    <div data-kpi data-field-id="kill.impact_agents"><dt>{{ help.name("kill.impact_agents") }} {{ help.button("kill.impact_agents") }}</dt><dd class="num">{{ impact.agents }}</dd></div>
+    <div data-kpi data-field-id="kill.impact_requests"><dt>{{ help.name("kill.impact_requests") }} {{ help.button("kill.impact_requests") }}</dt><dd class="num">{{ impact.requests_5m }}</dd></div>
+  </dl>
+</section>
+<section aria-labelledby="confirm-title">
+  <h2 id="confirm-title">Confirm</h2>
+  <form method="post" action="/admin/kill-switch" class="form">
+    <input type="hidden" name="scope" value="{{ scope }}">
+    <div class="field">
+      <div class="field__label"><label for="reason" data-field-id="change.reason">{{ help.name("change.reason") }}</label> {{ help.button("change.reason") }}</div>
+      <textarea id="reason" name="reason" data-field-id="change.reason" rows="3" minlength="10" maxlength="300" required{% if error %} aria-invalid="true" aria-describedby="reason-error"{% endif %}>{{ reason }}</textarea>
+      {% if error %}<p class="field__error" id="reason-error" role="alert"><span aria-hidden="true">×</span> {{ error }}</p>{% endif %}
+    </div>
+    {{ stepup(help, demo_code) }}
+    <p class="actions"><button type="submit" class="btn btn--danger">Switch on for {{ impact.scope_name }}</button> <a href="/admin#kill-title">Cancel</a></p>
+  </form>
+</section>
+{% endblock %}

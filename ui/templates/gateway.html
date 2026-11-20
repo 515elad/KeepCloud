@@ -2,7 +2,7 @@
 {% macro change(c) %}
 {% if c %}<span class="num"><time datetime="{{ c.changed_at.isoformat() }}">{{ c.changed_at | ts }}</time></span><span class="sub">{{ c.actor }}: {{ c.reason }}</span>{% else %}<span class="sub">No change recorded</span>{% endif %}
 {% endmacro %}
-{% macro switch(kind, id, on, locked_by=None) %}
+{% macro switch(kind, id, on, locked_by=None, own_blocked=False) %}
 {% set why = "why-" ~ kind ~ "-" ~ id | replace("/", "--") %}
 {% if on %}
 <form method="get" action="/gateway/block" class="switch-form">
@@ -11,7 +11,7 @@
     <span class="switch__track" aria-hidden="true"><span class="switch__thumb"></span></span><span>Allowed</span>
   </button>
 </form>
-{% elif locked_by %}
+{% elif locked_by and not own_blocked %}
 <span class="switch-wrap" title="Controlled by vendor {{ locked_by }}. This model cannot be allowed while the vendor is blocked.">
   <button type="button" class="switch" role="switch" aria-checked="false" disabled aria-describedby="{{ why }}" aria-label="{{ id }} switch, locked">
     <span class="switch__track" aria-hidden="true"><span class="switch__thumb"></span></span><span>Locked</span>
@@ -20,10 +20,14 @@
 </span>
 {% else %}
 <span class="switch-wrap">
-  <button type="button" class="switch" role="switch" aria-checked="false" disabled aria-describedby="{{ why }}" aria-label="{{ id }} is blocked. Lifting is not available.">
+  <button type="button" class="switch" role="switch" aria-checked="false" disabled aria-describedby="{{ why }}" aria-label="{{ id }} is blocked. One person cannot switch it back on.">
     <span class="switch__track" aria-hidden="true"><span class="switch__thumb"></span></span><span>Blocked</span>
   </button>
-  <span class="sub" id="{{ why }}" data-why>Lifting a block needs two administrators. That flow arrives in phase 5. {{ pending("SD-03") }}</span>
+  {% if lifts.get((kind, id)) %}
+  <span class="sub" id="{{ why }}" data-why data-awaiting><span aria-hidden="true">⏸</span> Lift requested by {{ lifts[(kind, id)] }}. Awaiting second approver. <a href="/approvals#pending-title">Open Approvals</a></span>
+  {% else %}
+  <span class="sub" id="{{ why }}" data-why>Lifting a block needs two administrators. <a href="/gateway/lift?type={{ kind }}&amp;id={{ id | urlencode }}" data-lift>Ask to lift this block</a> {{ pending("SD-03") }}</span>
+  {% endif %}
 </span>
 {% endif %}
 {% endmacro %}

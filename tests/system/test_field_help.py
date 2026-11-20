@@ -4,7 +4,7 @@ import pytest
 from bs4 import BeautifulSoup
 
 from keepair.config import REPO_ROOT
-from keepair.demo.seed import demo_clock
+from keepair.demo.seed import DEMO_PASSWORD, demo_clock
 from keepair.formulas import FORMULAS
 from keepair.help_registry import HelpRegistry
 from tests.system.conftest import ALL_PATHS
@@ -14,6 +14,9 @@ pytestmark = pytest.mark.req("Information system (owner brief)", "UX-14")
 REGISTRY = HelpRegistry.load(REPO_ROOT / "ui" / "help" / "field_help.yaml")
 # Fields that appear only after an action (a POST, or a fail-open). Each has its own walk below.
 POST_ONLY = {
+    "user.initial_password",
+    "user.totp_secret",
+    "audit.verify_result",
     "credential.token",
     "failopen.banner",
     "console.agent",
@@ -25,6 +28,17 @@ FIELD_SELECTOR = "th, label, input:not([type=hidden]), select, textarea, [data-k
 PARTS = ["unit", "source", "formula", "example", "range", "validation", "prd"]
 
 
+# Detail and form pages that the navigation does not link to directly.
+EXTRA_PATHS = [
+    "/gateway/block?type=vendor&id=vendor-a",
+    "/gateway/block?type=model&id=vendor-a/model-1",
+    "/gateway/lift?type=vendor&id=vendor-b",
+    "/gateway/fail-open",
+    "/admin/kill-switch?scope=GLOBAL:",
+    "/login",
+]
+
+
 def fields_on(soup: BeautifulSoup) -> list:
     return soup.select(FIELD_SELECTOR)
 
@@ -32,17 +46,13 @@ def fields_on(soup: BeautifulSoup) -> list:
 def walk_paths(ui) -> list[str]:
     """Every page of the app: the navigation pages plus each detail and form page."""
     budget_links = [a["href"] for a in ui.soup("/budgets").select("table[data-table=budgets] a")]
-    forms = [
-        "/gateway/block?type=vendor&id=vendor-a",
-        "/gateway/block?type=model&id=vendor-a/model-1",
-    ]
-    return [*ALL_PATHS, *budget_links, *forms, "/gateway/fail-open"]
+    return [*ALL_PATHS, *budget_links, *EXTRA_PATHS]
 
 
 def test_every_field_column_and_kpi_has_a_registry_entry_and_an_i_button(ui_traffic):
     ui = ui_traffic
     paths = walk_paths(ui)
-    assert len(paths) == len(ALL_PATHS) + 22 + 3
+    assert len(paths) == len(ALL_PATHS) + 22 + len(EXTRA_PATHS)
     for path in paths:
         check_fields(ui.soup(path), path)
 
@@ -58,6 +68,32 @@ def test_pages_reached_only_by_post_also_have_help_on_every_field(ui):
     soup = BeautifulSoup(response.text, "html.parser")
     check_fields(soup, "POST /gateway/credentials")
     assert soup.select_one('[data-kpi][data-field-id="credential.token"]')
+
+
+def test_pages_that_show_secrets_once_and_the_chain_check_have_help(ui):
+    created = ui.post(
+        "/admin/users",
+        {"username": "new.person", "display_name": "New Person", "role": "FINANCE",
+         "totp": ui.code()},
+    )  # fmt: skip
+    assert created.status_code == 200
+    soup = BeautifulSoup(created.text, "html.parser")
+    check_fields(soup, "POST /admin/users")
+    assert {el["data-field-id"] for el in soup.select("main [data-kpi]")} == {
+        "user.initial_password",
+        "user.totp_secret",
+    }
+    verified = ui.post("/audit-log/verify")
+    assert verified.status_code == 200
+    soup = BeautifulSoup(verified.text, "html.parser")
+    check_fields(soup, "POST /audit-log/verify")
+    assert soup.select_one('[data-kpi][data-field-id="audit.verify_result"]')
+    code_page = ui.anonymous()
+    assert (
+        code_page.post("/login", {"username": "bob.admin", "password": DEMO_PASSWORD}).status_code
+        == 303
+    )
+    check_fields(code_page.soup("/login/code"), "GET /login/code")
 
 
 def test_console_results_and_banner_also_have_help_on_every_field(ui_traffic):

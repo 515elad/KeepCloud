@@ -1,5 +1,130 @@
 {% extends "page.html" %}
 {% block content %}
+{% if users is not none %}
+<section aria-labelledby="users-title">
+  <h2 id="users-title">Users</h2>
+  <p class="hint">Local accounts. Everyone signs in with a password and an authenticator code. Single sign-on is not built. {{ pending("D-06") }}</p>
+  {% if user_error %}<p class="notice notice--bad" role="alert"><span aria-hidden="true">×</span> {{ user_error }} Nothing was changed.</p>{% endif %}
+  <div class="table-wrap" tabindex="0" role="region" aria-labelledby="users-title">
+    <table class="dense" data-table="users">
+      <thead><tr>{{ help.th("user.username") }}{{ help.th("user.display_name") }}{{ help.th("user.role") }}{{ help.th("user.status") }}{{ help.th("user.owns") }}{{ help.th("user.created_at") }}{{ help.th("user.actions") }}</tr></thead>
+      <tbody>
+        {% for u in users %}
+        <tr data-user-row="{{ u.username }}" data-active="{{ 'yes' if u.active else 'no' }}">
+          <td><code>{{ u.username }}</code>{% if u.is_self %}<span class="sub">You</span>{% endif %}</td>
+          <td>{{ u.display_name }}</td>
+          <td>{{ u.role_label }}</td>
+          <td>{% if not u.active %}<span class="reg reg--blocked"><span aria-hidden="true">⛔</span> Disabled</span>{% elif u.locked %}<span class="reg reg--unregistered"><span aria-hidden="true">⌛</span> Locked for 15 minutes</span>{% else %}<span class="reg reg--allowed"><span aria-hidden="true">✓</span> Active</span>{% endif %}</td>
+          <td class="num amount">{{ u.owns }}</td>
+          <td class="num"><time datetime="{{ u.created_at.isoformat() }}">{{ u.created_at | ts }}</time></td>
+          <td>
+            {% if not can_manage_users %}<span class="sub">Administrators only</span>
+            {% elif u.is_self %}<span class="sub" data-why>You cannot disable or reset your own account.</span>
+            {% else %}
+            <form method="post" action="/admin/users/{{ u.id }}/status" class="form form--inline">
+              <input type="hidden" name="status" value="{{ 'DISABLED' if u.active else 'ACTIVE' }}">
+              {{ stepup(help, demo_code, "u" ~ loop.index) }}
+              <p class="actions"><button type="submit" class="btn btn--small{% if u.active %} btn--danger{% endif %}" aria-label="{{ 'Disable' if u.active else 'Enable' }} {{ u.username }}">{{ "Disable" if u.active else "Enable" }}</button>
+              <button type="submit" formaction="/admin/users/{{ u.id }}/reset" class="btn btn--small" aria-label="Reset the sign-in of {{ u.username }}">Reset sign-in</button></p>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if can_manage_users %}
+  <form method="post" action="/admin/users" class="form form--inline" aria-labelledby="new-user-title">
+    <h3 id="new-user-title">Add a user</h3>
+    <div class="field">
+      <div class="field__label"><label for="new-username" data-field-id="user.username">{{ help.name("user.username") }}</label> {{ help.button("user.username") }}</div>
+      <input id="new-username" name="username" type="text" data-field-id="user.username" pattern="[a-z][a-z0-9._\-]{2,39}" maxlength="40" autocomplete="off" autocapitalize="none" spellcheck="false" required>
+    </div>
+    <div class="field">
+      <div class="field__label"><label for="new-display" data-field-id="user.display_name">{{ help.name("user.display_name") }}</label> {{ help.button("user.display_name") }}</div>
+      <input id="new-display" name="display_name" type="text" data-field-id="user.display_name" maxlength="80" autocomplete="off" required>
+    </div>
+    <div class="field">
+      <div class="field__label"><label for="new-role" data-field-id="user.role">{{ help.name("user.role") }}</label> {{ help.button("user.role") }}</div>
+      <select id="new-role" name="role" data-field-id="user.role" required>{% for value, label in roles %}<option value="{{ value }}">{{ label }}</option>{% endfor %}</select>
+    </div>
+    {{ stepup(help, demo_code, "new") }}
+    <p class="actions"><button type="submit" class="btn">Add user</button></p>
+  </form>
+  {% endif %}
+</section>
+
+<section aria-labelledby="kill-title">
+  <h2 id="kill-title">Kill switch</h2>
+  <p class="hint">Stops traffic at the gateway within 5 seconds: all of it, one vendor, or one project. Switching on is one step. Switching off needs a second administrator. {{ pending("SD-10") }}</p>
+  <div class="table-wrap" tabindex="0" role="region" aria-labelledby="kill-title">
+    <table class="dense" data-table="kill-active">
+      <thead><tr>{{ help.th("kill.scope") }}{{ help.th("change.reason") }}{{ help.th("kill.activated_by") }}{{ help.th("kill.activated_at") }}{{ help.th("kill.off") }}</tr></thead>
+      <tbody>
+        {% for k in switches %}
+        <tr data-kill="{{ k.id }}">
+          <td><span class="reg reg--blocked"><span aria-hidden="true">■</span> On</span> {{ k.scope_name }}<span class="sub">{{ k.scope_label }}</span></td>
+          <td>{{ k.reason }}</td>
+          <td>{{ k.activated_by }}</td>
+          <td class="num"><time datetime="{{ k.activated_at.isoformat() }}">{{ k.activated_at | ts }}</time></td>
+          <td>
+            {% if k.off_requested_by %}<p class="pending-note" data-awaiting><span aria-hidden="true">⏸</span> Awaiting second approver. <span class="sub">Asked by {{ k.off_requested_by }}. <a href="/approvals#pending-title">Open Approvals</a></span></p>
+            {% elif can_switch %}
+            <form method="post" action="/admin/kill-switch/{{ k.id }}/off" class="form form--inline">
+              <div class="field">
+                <div class="field__label"><label for="off-reason-{{ loop.index }}" data-field-id="change.reason">{{ help.name("change.reason") }}</label> {{ help.button("change.reason") }}</div>
+                <input type="text" id="off-reason-{{ loop.index }}" name="reason" data-field-id="change.reason" minlength="10" maxlength="300" required>
+              </div>
+              {{ stepup(help, demo_code, "k" ~ loop.index) }}
+              <p class="actions"><button type="submit" class="btn btn--small">Ask to switch off</button></p>
+            </form>
+            {% else %}<span class="sub">Administrators only</span>{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="empty">No kill switch is on.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if can_switch and scopes %}
+  <form method="get" action="/admin/kill-switch" class="form form--inline" aria-labelledby="kill-new-title">
+    <h3 id="kill-new-title">Switch on</h3>
+    <div class="field">
+      <div class="field__label"><label for="kill-scope" data-field-id="kill.scope">{{ help.name("kill.scope") }}</label> {{ help.button("kill.scope") }}</div>
+      <select id="kill-scope" name="scope" data-field-id="kill.scope" required>
+        <option value="GLOBAL:">All traffic</option>
+        <optgroup label="One vendor">{% for v in scopes.vendors %}<option value="VENDOR:{{ v }}">Vendor {{ v }}</option>{% endfor %}</optgroup>
+        <optgroup label="One project">{% for pid, name in scopes.projects %}<option value="PROJECT:{{ pid }}">Project {{ name }}</option>{% endfor %}</optgroup>
+      </select>
+    </div>
+    <p class="actions"><button type="submit" class="btn btn--danger">Preview the impact</button></p>
+  </form>
+  <p class="hint">The next page shows what would stop and asks for a reason. Nothing is switched on yet.</p>
+  {% endif %}
+  <h3 id="kill-history-title">Earlier uses</h3>
+  <div class="table-wrap" tabindex="0" role="region" aria-labelledby="kill-history-title">
+    <table class="dense" data-table="kill-history">
+      <thead><tr>{{ help.th("kill.scope") }}{{ help.th("change.reason") }}{{ help.th("kill.activated_by") }}{{ help.th("kill.activated_at") }}{{ help.th("kill.deactivated_at") }}{{ help.th("kill.deactivated_by") }}</tr></thead>
+      <tbody>
+        {% for k in past_switches %}
+        <tr>
+          <td>{{ k.scope_name }}<span class="sub">{{ k.scope_label }}</span></td>
+          <td>{{ k.reason }}</td>
+          <td>{{ k.activated_by }}</td>
+          <td class="num"><time datetime="{{ k.activated_at.isoformat() }}">{{ k.activated_at | ts }}</time></td>
+          <td class="num"><time datetime="{{ k.deactivated_at.isoformat() }}">{{ k.deactivated_at | ts }}</time></td>
+          <td>{{ k.deactivated_by }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="empty">The kill switch has not been used.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
 {% if demo_console %}
 <section aria-labelledby="console-title">
   <h2 id="console-title">Demo console</h2>

@@ -8,6 +8,29 @@
 </section>
 {% endif %}
 
+{% if unowned %}
+<section aria-labelledby="unowned-title">
+  <h2 id="unowned-title">Unowned spend</h2>
+  <dl class="kpis">
+    <div data-kpi data-field-id="owner.unowned_spend">
+      <dt>{{ help.name("owner.unowned_spend") }} {{ help.button("owner.unowned_spend") }}</dt>
+      <dd class="num" data-unowned-spend>{{ unowned.text }}</dd>
+      {% if unowned.figure %}<dd>{{ fin_chip(unowned.figure.state) }}</dd>{% endif %}
+    </div>
+    <div data-kpi data-field-id="owner.unowned_budgets">
+      <dt>{{ help.name("owner.unowned_budgets") }} {{ help.button("owner.unowned_budgets") }}</dt>
+      <dd class="num{% if unowned.budgets %} is-over{% endif %}" data-unowned-count>{{ unowned.budgets | length }}</dd>
+    </div>
+  </dl>
+  {% if unowned.budgets %}
+  <p class="hint">No accountable person is named for these budgets. A hard limit cannot be switched on for them until an owner is assigned.</p>
+  <ul class="links" data-unowned-list>{% for budget_id, name in unowned.budgets %}<li><a href="/budgets/{{ budget_id }}#owner-title">{{ name }}</a></li>{% endfor %}</ul>
+  {% else %}
+  <p class="hint">Every budget has an accountable owner.</p>
+  {% endif %}
+</section>
+{% endif %}
+
 <section aria-labelledby="demo-title">
   <h2 id="demo-title">Demo data</h2>
   <dl class="kpis">

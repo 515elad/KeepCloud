@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Sign in{% endblock %}
+{% block main %}
+<h1>Sign in</h1>
+<p class="lede">Step 1 of 2. Your user name and password, then a code from your authenticator.</p>
+{% if not any_user %}<p class="notice" role="status">No accounts exist yet. Load the demo data with <code>python -m keepair.demo.seed</code>.</p>{% endif %}
+{% if error %}<p class="notice notice--bad" role="alert"><span aria-hidden="true">×</span> {{ error }}</p>{% endif %}
+<form method="post" action="/login" class="form form--narrow">
+  <div class="field">
+    <div class="field__label"><label for="username" data-field-id="auth.username">{{ help.name("auth.username") }}</label> {{ help.button("auth.username") }}</div>
+    <input id="username" name="username" type="text" data-field-id="auth.username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="40" required>
+  </div>
+  <div class="field">
+    <div class="field__label"><label for="password" data-field-id="auth.password">{{ help.name("auth.password") }}</label> {{ help.button("auth.password") }}</div>
+    <input id="password" name="password" type="password" data-field-id="auth.password" autocomplete="current-password" maxlength="128" required>
+  </div>
+  <p class="actions"><button type="submit" class="btn">Continue</button></p>
+</form>
+{% if accounts %}
+<section aria-labelledby="demo-accounts-title" data-demo-accounts>
+  <h2 id="demo-accounts-title"><strong>DEMO</strong> accounts</h2>
+  <p class="hint">Shown in demo mode only. These are fictional people. Every one of them has the password <code data-demo-password>{{ demo_password }}</code>. The next page shows the authenticator code.</p>
+  <ul class="links">
+    {% for username, display_name, role in accounts %}<li><code>{{ username }}</code> {{ display_name }} <span class="tag">{{ role }}</span></li>{% endfor %}
+  </ul>
+</section>
+{% endif %}
+{% endblock %}

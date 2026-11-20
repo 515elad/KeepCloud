@@ -1,0 +1,30 @@
+{% extends "page.html" %}
+{% block title %}Lift the block on {{ subject_id }}{% endblock %}
+{% block heading %}
+<p class="crumbs"><a href="/gateway">Gateway</a></p>
+<h1>Ask to lift the block on {{ subject_type }} <code>{{ subject_id }}</code></h1>
+{% endblock %}
+{% block content %}
+<section aria-labelledby="how-title">
+  <h2 id="how-title">What happens</h2>
+  <p>This is for a block that was added by mistake or is no longer needed. You ask; a second administrator approves within 24 hours with a fresh authenticator code. Until then the block stays. There is no time-boxed override. {{ pending("SD-03") }}</p>
+  {% if vendor_blocked %}<p class="notice notice--warn" role="status"><span aria-hidden="true">!</span> Vendor <code>{{ vendor_blocked }}</code> is blocked. Lifting this model's own block will not allow the model while the vendor stays blocked.</p>{% endif %}
+  <div data-kpi data-field-id="approval.eligible">
+    <p>{{ help.name("approval.eligible") }} {{ help.button("approval.eligible") }}</p>
+    <p data-eligible>{% for name in eligible %}<code>{{ name }}</code> {% else %}<span class="warn"><span aria-hidden="true">!</span> No other active administrator exists, so nobody could approve this.</span>{% endfor %}</p>
+  </div>
+</section>
+<section aria-labelledby="confirm-title">
+  <h2 id="confirm-title">Request</h2>
+  <form method="post" action="/gateway/lift" class="form">
+    <input type="hidden" name="type" value="{{ subject_type }}"><input type="hidden" name="id" value="{{ subject_id }}">
+    <div class="field">
+      <div class="field__label"><label for="reason" data-field-id="change.reason">{{ help.name("change.reason") }}</label> {{ help.button("change.reason") }}</div>
+      <textarea id="reason" name="reason" data-field-id="change.reason" rows="3" minlength="10" maxlength="300" required{% if error %} aria-invalid="true" aria-describedby="reason-error"{% endif %}>{{ reason }}</textarea>
+      {% if error %}<p class="field__error" id="reason-error" role="alert"><span aria-hidden="true">×</span> {{ error }}</p>{% endif %}
+    </div>
+    {{ stepup(help, demo_code) }}
+    <p class="actions"><button type="submit" class="btn">Ask a second administrator</button> <a href="/gateway">Cancel</a></p>
+  </form>
+</section>
+{% endblock %}

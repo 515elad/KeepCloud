@@ -30,6 +30,13 @@
 </dl>
 <p class="hint">Each figure has its own state and they are never added together. An estimate is not a charge.</p>
 {%- endmacro %}
+{% macro stepup(help, demo_code, n="") %}
+<div class="field field--code">
+  <div class="field__label"><label for="totp{{ n }}" data-field-id="auth.code">{{ help.name("auth.code") }}</label> {{ help.button("auth.code") }}</div>
+  <input id="totp{{ n }}" name="totp" type="text" data-field-id="auth.code" inputmode="numeric" pattern="[0-9 ]{6,7}" maxlength="7" autocomplete="one-time-code" required>
+  {% if demo_code %}<p class="demo-code" data-demo-code="{{ demo_code }}"><strong>DEMO</strong> Your authenticator would show <code>{{ demo_code }}</code> now.</p>{% elif demo_mode %}<p class="demo-code"><strong>DEMO</strong> The next code is not valid yet. It appears here in a few seconds.</p>{% endif %}
+</div>
+{%- endmacro %}
 {% macro pending(decision) %}<span class="pending" data-pending="{{ decision }}">Pending decision <code>{{ decision }}</code></span>{% endmacro %}
 {% macro db_notice(state) %}
 {% if not state.database_reachable %}
@@ -56,7 +63,19 @@
   <header class="top">
     <a class="brand" href="/">KeepAir</a>
     {% block health_strip %}{% endblock %}
+    {% if user %}
+    <form method="post" action="/logout" class="userbar" data-user="{{ user.username }}">
+      <span>Signed in as <strong>{{ user.display_name }}</strong> <span class="tag">{{ role_label }}</span></span>
+      <button type="submit" class="btn btn--small">Sign out</button>
+    </form>
+    {% endif %}
   </header>
+  {% if state is defined and state.kill_switches %}
+  <section class="killband" role="alert" aria-labelledby="kill-band-title" data-kill-band>
+    <h2 id="kill-band-title"><span aria-hidden="true">■</span> Kill switch on</h2>
+    <p>The gateway refuses requests for: {% for k in state.kill_switches %}<strong>{{ k.scope_name }}</strong>{% if not loop.last %}, {% endif %}{% endfor %}. <a href="/admin#kill-title">Open the kill switch</a></p>
+  </section>
+  {% endif %}
   {% if state is defined and state.fail_open.show_banner %}
   {% set fo = state.fail_open %}
   <section class="failopen{% if fo.active %} failopen--active{% endif %}" role="{{ 'alert' if fo.active else 'status' }}" aria-labelledby="failopen-title" data-fail-open-banner>
@@ -81,6 +100,7 @@
   </section>
   {% endif %}
   <div class="frame">
+    {% if pages %}
     <nav class="nav" aria-label="Main">
       <ul>
         {% for p in pages %}
@@ -88,6 +108,7 @@
         {% endfor %}
       </ul>
     </nav>
+    {% endif %}
     <main id="main" tabindex="-1">
       {% block main %}{% endblock %}
     </main>

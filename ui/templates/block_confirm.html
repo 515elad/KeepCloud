@@ -13,7 +13,7 @@
       {% for m in affected %}<li><code>{{ m.id }}</code>{% if m.effective.value != "ALLOWED" %} <span class="sub">already blocked</span>{% endif %}</li>{% else %}<li>No models are registered for this vendor.</li>{% endfor %}
     </ul>
   </div>
-  <p class="hint">The block applies at once. Lifting it later needs two administrators, and that flow arrives in phase 5, so this demo cannot undo it except by reloading the demo data. {{ pending("SD-03") }}</p>
+  <p class="hint">The block applies at once. Lifting it later needs two administrators: one asks, a different one approves. {{ pending("SD-03") }}</p>
 </section>
 <section aria-labelledby="confirm-title">
   <h2 id="confirm-title">Confirm</h2>
@@ -24,6 +24,7 @@
       <textarea id="reason" name="reason" data-field-id="block.reason" rows="3" minlength="10" maxlength="300" required{% if error %} aria-invalid="true" aria-describedby="reason-error"{% endif %}>{{ reason }}</textarea>
       {% if error %}<p class="field__error" id="reason-error" role="alert"><span aria-hidden="true">×</span> {{ error }}</p>{% endif %}
     </div>
+    {{ stepup(help, demo_code) }}
     <p class="actions"><button type="submit" class="btn btn--danger">Block {{ subject_id }}</button> <a href="/gateway">Cancel</a></p>
   </form>
 </section>

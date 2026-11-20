@@ -1,0 +1,106 @@
+{% extends "page.html" %}
+{% block content %}
+{% if notice %}<p class="notice notice--bad" role="alert"><span aria-hidden="true">×</span> {{ notice }} Nothing was changed.</p>{% endif %}
+{% if held is not none %}
+<section aria-labelledby="held-title">
+  <h2 id="held-title">Held requests</h2>
+  <p class="hint">A request on an approval budget is held: its budget is reserved and nothing is sent. The request text is not stored. <strong>Approving allows one matching resubmission within {{ window_min }} minutes</strong>: the agent sends the same request again and it goes through once. Rejecting gives the budget back. {{ pending("D-07") }} {{ pending("UX-D2") }}</p>
+  <div class="table-wrap" tabindex="0" role="region" aria-labelledby="held-title">
+    <table class="dense" data-table="held">
+      <thead><tr>{{ help.th("held.requested_at") }}{{ help.th("held.agent") }}{{ help.th("held.model") }}{{ help.th("held.amount") }}{{ help.th("held.budget") }}{{ help.th("budget.effective_remaining") }}{{ help.th("held.expires_at") }}{{ help.th("held.note") }}{{ help.th("held.decision") }}</tr></thead>
+      <tbody>
+        {% for h in held %}
+        <tr data-held="{{ h.reservation_id }}" data-held-state="{{ 'APPROVED' if h.approved else 'HELD' }}">
+          <td class="num"><time datetime="{{ h.created_at.isoformat() }}">{{ h.created_at | ts }}</time></td>
+          <td>{{ h.agent }}<span class="sub">{{ h.project }}</span></td>
+          <td><code>{{ h.model }}</code></td>
+          <td class="num amount">{{ h.amount_text }}<span class="sub">Reserved, not spent</span></td>
+          <td><a href="/budgets/{{ h.budget_id }}">{{ h.budget_name }}</a></td>
+          <td class="num amount">{{ h.left_text }}<span class="sub">After this hold</span></td>
+          <td class="num"><time datetime="{{ h.expires_at.isoformat() }}">{{ h.expires_at | ts }}</time><span class="sub">{{ "Resubmission window ends" if h.approved else "Hold ends" }}</span></td>
+          {% if h.approved %}
+          <td><span aria-hidden="true">–</span><span class="sr-only">Decided</span></td>
+          <td><span class="outcome outcome--sent"><span aria-hidden="true">✓</span> Approved</span><span class="sub">Waiting for the agent to send the same request again.</span></td>
+          {% elif h.why_not %}
+          <td><span aria-hidden="true">–</span><span class="sr-only">Not available</span></td>
+          <td><button type="button" class="btn btn--small" disabled aria-describedby="why-held-{{ loop.index }}">Approve</button> <span class="sub" id="why-held-{{ loop.index }}" data-why>{{ h.why_not }}</span></td>
+          {% else %}
+          <td>
+            <label class="sr-only" for="note-{{ loop.index }}" data-field-id="held.note">Note for the request of {{ h.agent }}</label>
+            <input type="text" id="note-{{ loop.index }}" name="note" form="held-{{ loop.index }}" data-field-id="held.note" maxlength="300" placeholder="Optional">
+          </td>
+          <td>
+            <form method="post" action="/approvals/held/{{ h.reservation_id }}" id="held-{{ loop.index }}" class="assign">
+              <button type="submit" name="decision" value="approve" class="btn btn--small" aria-label="Approve the request of {{ h.agent }}: allows one matching resubmission within {{ window_min }} minutes">Approve one resubmission</button>
+              <button type="submit" name="decision" value="reject" class="btn btn--small btn--danger" aria-label="Reject the request of {{ h.agent }}">Reject</button>
+            </form>
+          </td>
+          {% endif %}
+        </tr>
+        {% else %}
+        <tr><td colspan="9" class="empty">No request is held. Requests on approval budgets appear here.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section aria-labelledby="pending-title">
+  <h2 id="pending-title">Waiting for a second administrator</h2>
+  <p class="hint">Lifting a block, switching a kill switch off, changing the owner of a hard-limit budget and weakening an enforcing budget take effect only when a second administrator approves within 24 hours. The second person must be someone else and must give a fresh authenticator code. A time-boxed override of a block does not exist. {{ pending("SD-03") }}</p>
+  <div class="table-wrap" tabindex="0" role="region" aria-labelledby="pending-title">
+    <table class="dense" data-table="pending">
+      <thead><tr>{{ help.th("approval.kind") }}{{ help.th("approval.requested_by") }}{{ help.th("change.reason") }}{{ help.th("approval.expires_at") }}{{ help.th("approval.eligible") }}{{ help.th("approval.decision") }}</tr></thead>
+      <tbody>
+        {% for p in waiting %}
+        <tr data-pending-id="{{ p.id }}" data-kind="{{ p.kind }}">
+          <td>{{ p.kind_label }}<span class="sub">{{ p.summary }}</span></td>
+          <td>{{ p.requested_by }}<span class="sub num"><time datetime="{{ p.requested_at.isoformat() }}">{{ p.requested_at | ts }}</time></span></td>
+          <td>{{ p.reason }}</td>
+          <td class="num"><time datetime="{{ p.expires_at.isoformat() }}">{{ p.expires_at | ts }}</time></td>
+          <td>{% for name in p.eligible %}<code>{{ name }}</code> {% else %}<span class="warn"><span aria-hidden="true">!</span> No other active administrator exists.</span>{% endfor %}</td>
+          <td>
+            {% if p.mine %}
+            <p class="pending-note" data-self><span aria-hidden="true">⏸</span> Pending second approver. <span class="sub">You made this request, so you cannot approve it.</span></p>
+            <form method="post" action="/approvals/{{ p.id }}/cancel"><button type="submit" class="btn btn--small">Cancel my request</button></form>
+            {% elif p.can_decide %}
+            <form method="post" action="/approvals/{{ p.id }}/decide" class="form form--inline">
+              {{ stepup(help, demo_code, loop.index) }}
+              <p class="actions"><button type="submit" name="decision" value="approve" class="btn btn--small">Approve</button> <button type="submit" name="decision" value="reject" class="btn btn--small btn--danger">Reject</button></p>
+            </form>
+            {% else %}
+            <span class="sub" data-why>Only an administrator can decide this.</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="empty">Nothing is waiting for a second administrator.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section aria-labelledby="decisions-title">
+  <h2 id="decisions-title">Recent decisions</h2>
+  <div class="table-wrap" tabindex="0" role="region" aria-labelledby="decisions-title">
+    <table class="dense" data-table="decisions">
+      <thead><tr>{{ help.th("approval.decided_at") }}{{ help.th("approval.kind") }}{{ help.th("approval.requested_by") }}{{ help.th("approval.outcome") }}{{ help.th("approval.decided_by") }}</tr></thead>
+      <tbody>
+        {% for d in decisions %}
+        <tr>
+          <td class="num"><time datetime="{{ d.decided_at.isoformat() }}">{{ d.decided_at | ts }}</time></td>
+          <td>{{ d.kind_label }}<span class="sub">{{ d.summary }}</span></td>
+          <td>{{ d.requested_by }}</td>
+          <td>{{ d.decision }}</td>
+          <td>{{ d.decided_by }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="empty">No decision has been recorded.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+{% endblock %}

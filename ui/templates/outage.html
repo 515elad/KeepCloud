@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Database unreachable{% endblock %}
+{% block health_strip %}
+<section class="health" aria-labelledby="health-title">
+  <h2 id="health-title">Health {{ help.button("health.status") }}</h2>
+  <ul data-kpi data-field-id="health.status">
+    {% for item in state.health %}
+    <li data-component="{{ item.component.id }}"><span class="health__name">{{ item.component.name }}</span> {{ status_chip(item.status) }}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endblock %}
+{% block main %}
+<h1>The database cannot be reached</h1>
+<p class="notice notice--bad" role="alert"><span aria-hidden="true">×</span> The database cannot be reached. Nobody can be signed in and no page data can be read, so health is shown as Unknown. Nothing was changed.</p>
+<p class="lede">The gateway decides on its own: blocks and hard limits still refuse. This page shows only this outage. Reload it once the database is back.</p>
+<section aria-labelledby="demo-title">
+  <h2 id="demo-title">Demo data</h2>
+  <dl class="kpis">
+    <div data-kpi data-field-id="demo.clock"><dt>{{ help.name("demo.clock") }} {{ help.button("demo.clock") }}</dt><dd class="num">Not loaded</dd></div>
+  </dl>
+</section>
+<section aria-labelledby="alerts-title">
+  <h2 id="alerts-title">Alerts</h2>
+  <div class="table-wrap" tabindex="0" role="region" aria-labelledby="alerts-title">
+    <table data-table="alerts">
+      <thead><tr>{{ help.th("alert.raised_at") }}{{ help.th("alert.severity") }}{{ help.th("alert.code") }}{{ help.th("alert.component") }}{{ help.th("alert.message") }}</tr></thead>
+      <tbody>
+        {% for alert in state.alerts %}
+        <tr data-alert-code="{{ alert.code }}">
+          <td class="num"><time datetime="{{ alert.raised_at.isoformat() }}">{{ alert.raised_at | ts }}</time></td>
+          <td><span class="sev sev--{{ alert.severity | lower }}"><span aria-hidden="true">{{ {"SEV1": "▲", "SEV2": "◆", "SEV3": "●"}[alert.severity] }}</span> {{ alert.severity }}</span></td>
+          <td><code>{{ alert.code }}</code></td>
+          <td>{{ alert.component }}</td>
+          <td>{{ alert.message }}{% if alert.held_in_memory %} <span class="sub">Held in memory until the database is back.</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

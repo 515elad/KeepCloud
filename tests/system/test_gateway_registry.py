@@ -18,7 +18,7 @@ def model_rows(ui):
 def post_block(ui, subject_type, subject_id, reason=GOOD_REASON, headers=ORIGIN):
     return ui.client.post(
         "/gateway/block",
-        data={"type": subject_type, "id": subject_id, "reason": reason},
+        data={"type": subject_type, "id": subject_id, "reason": reason, "totp": ui.code()},
         headers=headers,
         follow_redirects=False,
     )
@@ -78,21 +78,34 @@ def test_no_model_ever_renders_allowed_under_a_blocked_vendor(ui):
 def test_last_change_shows_who_when_and_why(ui):
     row = ui.soup("/gateway").select_one('tr[data-vendor="vendor-b"]')
     text = row.get_text(" ", strip=True)
-    assert "2026-01-13 09:00:00 UTC" in text and "demo-admin" in text and "Contract review" in text
+    assert "2026-01-13 09:00:00 UTC" in text and "alice.admin" in text and "Contract review" in text
     assert row.find("time")["datetime"].startswith("2026-01-13T09:00:00")
 
 
 @pytest.mark.req("FR-18 (lifting needs two administrators)", "SD-03", "UX-9 (disabled with reason)")
-def test_lifting_a_block_is_shown_disabled_with_the_reason_and_has_no_route(ui):
+def test_one_person_cannot_switch_a_block_off(ui, engine):
+    """The switch stays disabled with the reason. The only way is to ask a second
+    administrator (tests/system/test_two_person.py), and asking changes nothing by itself."""
     row = ui.soup("/gateway").select_one('tr[data-vendor="vendor-b"]')
     switch = row.select_one("button[role=switch]")
     assert switch.has_attr("disabled")
     why = row.find(id=switch["aria-describedby"])
     assert "two administrators" in why.get_text() and why.select_one('[data-pending="SD-03"]')
-    for path in ("/gateway/unblock", "/gateway/lift", "/gateway/allow"):
+    assert why.select_one("a[data-lift]")["href"].startswith("/gateway/lift?type=vendor")
+    for path in ("/gateway/unblock", "/gateway/allow"):
         assert ui.client.post(
             path, data={"type": "vendor", "id": "vendor-b"}, headers=ORIGIN
         ).status_code in (404, 405)
+    asked = ui.post(
+        "/gateway/lift",
+        {"type": "vendor", "id": "vendor-b", "reason": GOOD_REASON, "totp": ui.code()},
+    )
+    assert asked.status_code == 303
+    with engine.connect() as conn:
+        status = conn.execute(
+            select(vendors.c.status).where(vendors.c.id == "vendor-b")
+        ).scalar_one()
+    assert status == "BLOCKED"  # asking is not lifting
     assert ui.client.get("/gateway/block?type=vendor&id=vendor-b").status_code == 200
     assert post_block(ui, "vendor", "vendor-b").status_code == 422  # already blocked: nothing to do
 
@@ -123,7 +136,7 @@ def test_block_flow_previews_impact_then_blocks_with_a_reason(ui, engine):
     assert response.status_code == 303 and response.headers["location"].startswith("/gateway")
     row = ui.soup("/gateway").select_one('tr[data-vendor="vendor-a"]')
     text = row.get_text(" ", strip=True)
-    assert "Blocked" in text and "demo-operator" in text and GOOD_REASON in text
+    assert "Blocked" in text and "alice.admin" in text and GOOD_REASON in text
     with engine.connect() as conn:
         status = conn.execute(
             select(vendors.c.status).where(vendors.c.id == "vendor-a")

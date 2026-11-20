@@ -1656,3 +1656,760 @@ fields:
     allowed_range: None, or Uncontrolled with an amount.
     validation: Calculated only. Without provider data nothing can be said either way.
     prd_ref: FR-19 (UNCONTROLLED_SPEND), bypass route B-b, UX-2
+
+  # --- Phase 5: sign-in, owners, approvals, kill switch ---------------------------
+  auth.username:
+    name: User name
+    meaning: The name of your KeepAir account. It is not case sensitive.
+    unit: Text, 3 to 40 characters.
+    source: user input
+    source_detail: Typed on the sign-in page.
+    worked_example:
+      description: An administrator in the demo data.
+      result: alice.admin
+    allowed_range: Lower-case letters, digits, dot, dash and underscore, starting with a letter.
+    validation: An unknown name gives the same answer as a wrong password, so the page does not reveal which names exist.
+    prd_ref: FR-13 (identity and access), SEC-13
+
+  auth.password:
+    name: Password
+    meaning: The secret you chose or were given for this account. KeepAir stores only a salted hash of it.
+    unit: Text, 12 to 128 characters. It is never shown.
+    source: user input
+    source_detail: Typed on the sign-in page.
+    worked_example:
+      description: What the input shows while typing.
+      result: Dots in place of the characters
+    allowed_range: 12 to 128 characters of any kind. No rule about digits or symbols.
+    validation: After 5 failed attempts the account is locked for 15 minutes.
+    prd_ref: FR-13 (identity and access), SEC-13 (NIST SP 800-63B password rules)
+
+  auth.code:
+    name: Authenticator code
+    meaning: The 6-digit code your authenticator app shows right now. It proves that the person acting holds the second factor, at sign-in and again for every sensitive action.
+    unit: 6 digits. A new code every 30 seconds.
+    source: user input
+    source_detail: Read from an authenticator app (time-based one-time password, RFC 6238) and typed here.
+    worked_example:
+      description: The form of a code. In demo mode the page shows the current one next to the input.
+      result: "492 039"
+    allowed_range: 6 digits. The code of the current 30-second step, or of the step before or after it.
+    validation: Each code is accepted once. A wrong or reused code changes nothing and counts as a failed attempt.
+    prd_ref: FR-13 (MFA with TOTP), SEC-13 (step-up for policy changes)
+
+  change.reason:
+    name: Reason
+    meaning: Why the change is made or asked for. It is stored in the audit log with the change.
+    unit: Text, 10 to 300 characters.
+    source: user input
+    source_detail: Typed by the person who makes or requests the change.
+    worked_example:
+      description: A reason for lifting a block.
+      result: Blocked by mistake, the contract was already signed.
+    allowed_range: 10 to 300 characters after trimming.
+    validation: Required. Shorter or longer text is refused and nothing is changed.
+    prd_ref: FR-17 (changes are logged with actor, time and reason), SEC-31
+
+  budget.owner:
+    name: Owner
+    meaning: The one person who is accountable for this budget. Unowned means nobody is named.
+    unit: Display name of an active user, or Unowned.
+    source: user input
+    source_detail: Assigned by an administrator on the budget's page.
+    worked_example:
+      description: The Research Agent budget in the demo data.
+      result: Omar Haddad
+    allowed_range: One active user, or none. An agent cannot be an owner.
+    validation: A hard-limit budget must have an active owner. The database refuses the row otherwise.
+    prd_ref: FR-17 (AI cost ownership), UX-8 (unowned bucket)
+
+  budget.owner_new:
+    name: New owner
+    meaning: The person who will be accountable for this budget. On a hard-limit budget that already has an owner, the change waits for a second administrator.
+    unit: One active user chosen from the list.
+    source: user input
+    source_detail: Chosen by an administrator.
+    worked_example:
+      description: Making an administrator the owner of the Call Notes budget.
+      result: Bob Lindqvist (bob.admin)
+    allowed_range: Any active user. "No owner" is offered only when the budget is not a hard limit.
+    validation: Needs a reason and a fresh authenticator code.
+    prd_ref: FR-17 (owner changes on a hard limit need a second administrator), SEC-15
+
+  budget.policy_new:
+    name: New policy
+    meaning: What the budget should do when spend reaches the cap. Switching to a hard limit needs an active owner, and removing a limit that stops spend waits for a second administrator.
+    unit: One of Monitor, Soft limit, Hard limit, Approval.
+    source: user input
+    source_detail: Chosen by an administrator.
+    worked_example:
+      description: Switching the Call Notes budget, which has no owner, to a hard limit.
+      result: Refused with NO_OWNER
+    allowed_range: Any policy other than the current one.
+    validation: Needs a reason and a fresh authenticator code.
+    prd_ref: FR-04 (budgets), FR-17 (owner required before a hard limit), SEC-15
+
+  owner.unowned_spend:
+    name: Unowned spend
+    meaning: Estimated spend this period on budgets that have no accountable owner. Nobody is named to answer for it.
+    unit: Money in the price list's currency, two decimals. An estimate, not a charge.
+    source: calculated
+    source_detail: Calculated from the gateway's usage records and the owners of the budgets.
+    formula: |
+      unowned = sum of estimated cost of usage whose scope has no active owner
+      scope of a usage record = its project, or its team when it names no project
+    formula_fn: unowned_spend
+    worked_example:
+      description: January 2026 in the demo data. Usage comes from the two projects in the list.
+      inputs:
+        period: 2026-01
+        scopes_without_owner: Benchmark Runs, Call Notes, Evaluation, Sales Assist
+      result: 11,971.30 USD
+    allowed_range: 0 or more.
+    validation: Calculated only. A disabled owner counts as no owner.
+    prd_ref: FR-17 (unowned AI spend is shown as a distinct bucket), UX-8
+
+  owner.unowned_budgets:
+    name: Budgets without an owner
+    meaning: How many budgets have no active person assigned as owner.
+    unit: Whole number of budgets.
+    source: calculated
+    source_detail: Counted from the budgets and their owners.
+    formula: |
+      unowned_budgets = budgets - budgets with an active owner
+    formula_fn: unowned_budgets
+    worked_example:
+      description: The demo data.
+      inputs:
+        budgets: "22"
+        with_active_owner: "18"
+      result: "4"
+    allowed_range: 0 up to the number of budgets.
+    validation: Calculated only.
+    prd_ref: FR-17 (every AI budget must have one accountable human owner)
+
+  held.requested_at:
+    name: Held at
+    meaning: When the gateway put the request on hold.
+    unit: Date and time, ISO 8601, stored in UTC. Shown as YYYY-MM-DD HH:MM:SS UTC.
+    source: gateway
+    source_detail: Written by the gateway with the reservation.
+    worked_example:
+      description: A request held at the demo clock.
+      result: "2026-01-15 09:00:00 UTC"
+    allowed_range: Any past time.
+    validation: Recorded only.
+    prd_ref: FR-11 (HELD queue), UX-11
+
+  held.agent:
+    name: Agent
+    meaning: The agent whose request is held, with its project. It comes from the credential, never from what the request says about itself.
+    unit: Agent name, with the project name below it.
+    source: gateway
+    source_detail: Derived from the gateway credential that sent the request.
+    worked_example:
+      description: The agent of the Research Agent project.
+      result: research-agent
+    allowed_range: A registered agent.
+    validation: Recorded only.
+    prd_ref: FR-11 (the approver sees request metadata), FR-05
+
+  held.model:
+    name: Model
+    meaning: The registered model the request asked for.
+    unit: Canonical model ID.
+    source: gateway
+    source_detail: The requested name after the gateway resolved aliases.
+    worked_example:
+      description: A request that asked for the alias model-1.
+      result: vendor-a/model-1
+    allowed_range: A registered model that is allowed.
+    validation: A blocked or unknown model is denied and never held.
+    prd_ref: FR-11 (request metadata), FR-18
+
+  held.amount:
+    name: Reserved
+    meaning: The upper estimate of what the request can cost. It is set aside in the budget while the request waits and is not spent.
+    unit: Money in the budget's currency. Six decimals when below one cent.
+    source: gateway
+    source_detail: The gateway's estimate, reserved in the ledger when the request was held.
+    worked_example:
+      description: A short request with a limit of 64 output tokens on vendor-a/model-1.
+      result: 0.001059 USD
+    allowed_range: 0 or more.
+    validation: Rejecting or letting the hold expire gives the amount back to the budget.
+    prd_ref: FR-11 (a hold reserves budget), FR-05
+
+  held.budget:
+    name: Budget
+    meaning: The approval budget that holds the request.
+    unit: Name of the budget's scope, linked to the budget.
+    source: gateway
+    source_detail: The budget of the agent's project.
+    worked_example:
+      description: A request from the research-agent.
+      result: Research Agent
+    allowed_range: A budget with the Approval policy.
+    validation: Recorded only.
+    prd_ref: FR-11 (budget impact), FR-04
+
+  held.expires_at:
+    name: Ends
+    meaning: When the hold ends by itself and the budget is given back. After an approval it is the end of the 15-minute window for sending the request again.
+    unit: Date and time, ISO 8601, stored in UTC. Shown as YYYY-MM-DD HH:MM:SS UTC.
+    source: system
+    source_detail: Set from the database clock, 24 hours after the hold or 15 minutes after the approval.
+    worked_example:
+      description: A request held at 2026-01-15 09:00:00 UTC.
+      result: "2026-01-16 09:00:00 UTC"
+    allowed_range: A future time.
+    validation: Expiry is judged by the database clock, not by the application.
+    prd_ref: FR-11 (approval expiry releases the hold), SEC-35
+
+  held.note:
+    name: Note
+    meaning: An optional remark by the approver. It is stored with the decision.
+    unit: Text, at most 300 characters.
+    source: user input
+    source_detail: Typed in this row.
+    worked_example:
+      description: A note on an approval.
+      result: Agreed with the team lead for the evaluation run.
+    allowed_range: Empty, or up to 300 characters.
+    validation: Longer text is cut to 300 characters.
+    prd_ref: FR-11 (every approval records identity, reason and decision)
+
+  held.decision:
+    name: Decision
+    meaning: Approve or reject the held request. Approving does not send anything, it allows the agent to send the same request once more within 15 minutes.
+    unit: Two buttons, or the reason why you cannot decide.
+    source: user input
+    source_detail: Clicked by an administrator or by the owner of a budget above the project.
+    worked_example:
+      description: What the owner of the Research Agent budget sees for a request of the research-agent.
+      result: Approve is disabled. This request comes from your own project.
+    allowed_range: Approve, or reject.
+    validation: The owner of the requesting project cannot approve. A blocked model or an active kill switch still refuses the resubmission.
+    prd_ref: FR-11 (requester cannot approve their own request), UX-11, SEC-15
+
+  approval.kind:
+    name: Action
+    meaning: What was asked for, in words.
+    unit: Kind of action, with the exact change below it.
+    source: system
+    source_detail: Written when the request was made.
+    worked_example:
+      description: A request to lift the vendor-b block.
+      result: Lift a block
+    allowed_range: Held request, lift a block, switch a kill switch off, change the owner of a hard-limit budget, weaken an enforcing budget.
+    validation: Recorded only.
+    prd_ref: UX-11 (two-person actions), SEC-15
+
+  approval.requested_by:
+    name: Requested by
+    meaning: Who asked. For a held request this is the agent, for a two-person action it is the administrator.
+    unit: User name or agent name, with the time of the request.
+    source: system
+    source_detail: Taken from the signed-in session, or from the gateway credential for a held request.
+    worked_example:
+      description: A block lift asked for by an administrator.
+      result: alice.admin
+    allowed_range: A user or an agent.
+    validation: Recorded only.
+    prd_ref: FR-11 (every approval records identity), SEC-15
+
+  approval.expires_at:
+    name: Must be confirmed by
+    meaning: The second administrator has until this time. After it the request closes and nothing is changed.
+    unit: Date and time, ISO 8601, stored in UTC. Shown as YYYY-MM-DD HH:MM:SS UTC.
+    source: system
+    source_detail: 24 hours after the request was made.
+    worked_example:
+      description: A request made at 2026-01-15 09:00:00 UTC.
+      result: "2026-01-16 09:00:00 UTC"
+    allowed_range: 24 hours after the request.
+    validation: An expired request cannot be approved.
+    prd_ref: UX-11 (the requester sees the expiry), SEC-07 (confirm within 24 hours)
+
+  approval.eligible:
+    name: Who can approve
+    meaning: The people who are allowed to be the second person. The requester is never one of them.
+    unit: List of user names.
+    source: calculated
+    source_detail: Calculated from the active administrators.
+    formula: |
+      eligible = active administrators - the requester
+    formula_fn: approval_eligible
+    worked_example:
+      description: A request made by alice.admin in the demo data.
+      inputs:
+        requested_by: alice.admin
+        active_administrators: alice.admin, bob.admin
+      result: bob.admin
+    allowed_range: Zero or more administrators. With zero, nobody can approve.
+    validation: Checked again by user ID when the approval is submitted, and once more by a database rule.
+    prd_ref: SEC-15 (two approvers differ in identity and hold ADMIN), UX-11 (who is eligible)
+
+  approval.decision:
+    name: Decision
+    meaning: Approve or reject as the second person, or see why you cannot. Your own request shows "pending second approver".
+    unit: Two buttons with an authenticator code, or a status.
+    source: user input
+    source_detail: Clicked by a second administrator.
+    worked_example:
+      description: What alice.admin sees for her own request.
+      result: Pending second approver
+    allowed_range: Approve or reject. The requester may cancel.
+    validation: Needs a fresh authenticator code. Self-approval is refused.
+    prd_ref: UX-11 (self-approval is disabled with a reason), SEC-15, SEC-13
+
+  approval.decided_at:
+    name: Decided at
+    meaning: When the decision was recorded.
+    unit: Date and time, ISO 8601, stored in UTC. Shown as YYYY-MM-DD HH:MM:SS UTC.
+    source: system
+    source_detail: Written with the decision.
+    worked_example:
+      description: A decision made at the demo clock.
+      result: "2026-01-15 09:00:00 UTC"
+    allowed_range: Any past time.
+    validation: Recorded only.
+    prd_ref: FR-11 (decision history)
+
+  approval.outcome:
+    name: Outcome
+    meaning: How the request ended.
+    unit: One of Approved, Rejected, Expired, Cancelled.
+    source: system
+    source_detail: Written with the decision.
+    worked_example:
+      description: A block lift that the second administrator confirmed.
+      result: Approved
+    allowed_range: The four listed outcomes.
+    validation: A request has one outcome and it cannot be changed.
+    prd_ref: FR-11 (decision history)
+
+  approval.decided_by:
+    name: Decided by
+    meaning: Who made the decision. It is "system" when a request expired.
+    unit: User name.
+    source: system
+    source_detail: Taken from the signed-in session.
+    worked_example:
+      description: The second administrator of a block lift asked for by alice.admin.
+      result: bob.admin
+    allowed_range: A user other than the requester, or the requester when cancelled.
+    validation: A database rule refuses a decision by the requester.
+    prd_ref: SEC-15 (requester and approver differ), FR-11
+
+  user.username:
+    name: User name
+    meaning: The name the person signs in with. It cannot be changed later.
+    unit: Text, 3 to 40 characters.
+    source: user input
+    source_detail: Typed by the administrator who adds the user.
+    worked_example:
+      description: A finance user in the demo data.
+      result: fiona.finance
+    allowed_range: Lower-case letters, digits, dot, dash and underscore, starting with a letter.
+    validation: Must be unused. Anything else is refused.
+    prd_ref: FR-13 (local accounts), FR-17
+
+  user.display_name:
+    name: Name
+    meaning: The person's name as it is shown as owner and in reports.
+    unit: Text, 1 to 80 characters.
+    source: user input
+    source_detail: Typed by the administrator who adds the user.
+    worked_example:
+      description: The same finance user.
+      result: Fiona Marchetti
+    allowed_range: 1 to 80 printable characters.
+    validation: Shown as text everywhere. In a CSV export a name that looks like a formula is written as plain text.
+    prd_ref: FR-13 (local accounts), SEC-27, SEC-29
+
+  user.role:
+    name: Role
+    meaning: What the person may do. One table in the code decides this for every page and action.
+    unit: One of Administrator, Finance, Engineering, Auditor.
+    source: user input
+    source_detail: Chosen by the administrator who adds the user.
+    worked_example:
+      description: The same finance user.
+      result: Finance
+    allowed_range: The four listed roles.
+    validation: Administrators change policy. Finance loads billing files and downloads reports. Auditors read everything and change nothing.
+    prd_ref: FR-13 (role-based access control), SEC-14
+
+  user.status:
+    name: Status
+    meaning: Whether the person can sign in.
+    unit: One of Active, Disabled, Locked for 15 minutes.
+    source: system
+    source_detail: Set by an administrator, or by 5 failed sign-in attempts.
+    worked_example:
+      description: A demo user.
+      result: Active
+    allowed_range: The three listed states.
+    validation: Disabling ends the person's sessions at once.
+    prd_ref: FR-13 (local-account lifecycle), SEC-17
+
+  user.owns:
+    name: Budgets owned
+    meaning: How many budgets name this person as owner.
+    unit: Whole number of budgets.
+    source: calculated
+    source_detail: Counted from the budgets.
+    formula: |
+      owns = number of budgets whose owner is this user
+    formula_fn: user_owns
+    worked_example:
+      description: The engineering owner in the demo data.
+      inputs:
+        user: omar.owner
+      result: "5"
+    allowed_range: 0 or more.
+    validation: A user who owns a hard-limit budget cannot be disabled until another owner is assigned.
+    prd_ref: FR-17 (ownership)
+
+  user.created_at:
+    name: Added
+    meaning: When the account was created.
+    unit: Date and time, ISO 8601, stored in UTC. Shown as YYYY-MM-DD HH:MM:SS UTC.
+    source: system
+    source_detail: Written when the account is created.
+    worked_example:
+      description: The demo accounts were created 40 days before the demo clock.
+      result: "2025-12-06 09:00:00 UTC"
+    allowed_range: Any past time.
+    validation: Recorded only.
+    prd_ref: FR-13 (local-account lifecycle)
+
+  user.actions:
+    name: Change
+    meaning: Disable or enable the account, or issue a new password and authenticator secret.
+    unit: Buttons with an authenticator code.
+    source: user input
+    source_detail: Clicked by an administrator.
+    worked_example:
+      description: What an administrator sees in their own row.
+      result: You cannot disable or reset your own account.
+    allowed_range: Disable, enable, reset sign-in.
+    validation: Needs a fresh authenticator code. Each change is written to the audit log.
+    prd_ref: FR-13 (local-account lifecycle), SEC-13, SEC-31
+
+  user.initial_password:
+    name: Initial password
+    meaning: The password generated for the account. It is shown this once and only its hash is kept.
+    unit: 20 letters and digits, without look-alike characters.
+    source: system
+    source_detail: Generated from operating-system randomness when the account is created or reset.
+    worked_example:
+      description: The form of a generated password.
+      result: hX7mPq2rKd9sTn4vWb6c
+    allowed_range: 20 characters.
+    validation: Cannot be shown again. Reset the sign-in if it is lost.
+    prd_ref: FR-13 (local accounts), SEC-13
+
+  user.totp_secret:
+    name: Authenticator secret
+    meaning: The secret the person types into an authenticator app, which then shows the 6-digit codes. It is shown this once and kept encrypted.
+    unit: 32 characters, base32.
+    source: system
+    source_detail: Generated from operating-system randomness. Stored encrypted with AES-256-GCM.
+    worked_example:
+      description: The form of a secret.
+      result: JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP
+    allowed_range: 160 random bits.
+    validation: Cannot be shown again. Reset the sign-in if it is lost.
+    prd_ref: FR-13 (MFA with TOTP), SEC-13
+
+  kill.scope:
+    name: Scope
+    meaning: What the kill switch stops. All traffic, every model of one vendor, or every agent of one project.
+    unit: One of All traffic, Vendor, Project.
+    source: user input
+    source_detail: Chosen by the administrator who switches it on.
+    worked_example:
+      description: Stopping everything during an incident.
+      result: All traffic
+    allowed_range: All traffic, a registered vendor, or an existing project.
+    validation: One switch per scope can be on at a time.
+    prd_ref: FR-22 (kill switch scopes), UX-7
+
+  kill.activated_by:
+    name: Switched on by
+    meaning: The administrator who switched it on.
+    unit: User name.
+    source: system
+    source_detail: Taken from the signed-in session.
+    worked_example:
+      description: A switch set by an administrator.
+      result: alice.admin
+    allowed_range: An administrator.
+    validation: Recorded only.
+    prd_ref: FR-22, SEC-08, SEC-31
+
+  kill.activated_at:
+    name: Switched on at
+    meaning: When it was switched on. The gateway refuses requests in scope within 5 seconds of this time.
+    unit: Date and time, ISO 8601, stored in UTC. Shown as YYYY-MM-DD HH:MM:SS UTC.
+    source: system
+    source_detail: Written when the switch is set.
+    worked_example:
+      description: A switch set at the demo clock.
+      result: "2026-01-15 09:00:00 UTC"
+    allowed_range: Any past time.
+    validation: Recorded only.
+    prd_ref: FR-22, SEC-08 (propagation within 5 seconds)
+
+  kill.off:
+    name: Switch off
+    meaning: Ask to switch it off. It stays on until a second administrator approves.
+    unit: A reason, an authenticator code and a button, or "awaiting second approver".
+    source: user input
+    source_detail: Asked by one administrator, approved by another on the Approvals page.
+    worked_example:
+      description: After one administrator has asked.
+      result: Awaiting second approver
+    allowed_range: One request at a time per switch.
+    validation: Needs a reason and a fresh authenticator code from each of the two people.
+    prd_ref: UX-7 (clearing shows "awaiting second approver"), SEC-08, SEC-15
+
+  kill.deactivated_at:
+    name: Switched off at
+    meaning: When the second administrator approved switching it off.
+    unit: Date and time, ISO 8601, stored in UTC. Shown as YYYY-MM-DD HH:MM:SS UTC.
+    source: system
+    source_detail: Written when the approval is given.
+    worked_example:
+      description: A switch that was on for one hour from the demo clock.
+      result: "2026-01-15 10:00:00 UTC"
+    allowed_range: Later than the time it was switched on.
+    validation: Recorded only.
+    prd_ref: FR-22, SEC-08
+
+  kill.deactivated_by:
+    name: Switched off by
+    meaning: The two administrators who switched it off, the one who asked and the one who approved.
+    unit: Two user names.
+    source: system
+    source_detail: Taken from the request and from the approval.
+    worked_example:
+      description: A request by alice.admin approved by bob.admin.
+      result: alice.admin + bob.admin
+    allowed_range: Two different administrators.
+    validation: The two must differ.
+    prd_ref: SEC-08 (deactivation is two-person), SEC-15
+
+  kill.impact_projects:
+    name: Projects affected
+    meaning: How many projects would have requests refused. For a vendor it counts projects that used the vendor in the last 24 hours.
+    unit: Whole number of projects.
+    source: calculated
+    source_detail: Calculated from the registered projects and the gateway's recent decisions.
+    formula: |
+      all traffic: every registered project
+      project:     1
+      vendor:      projects with a gateway decision for one of the vendor's models
+                   in the last 24 hours
+    formula_fn: kill_impact_projects
+    worked_example:
+      description: A switch for all traffic in the demo data.
+      inputs:
+        scope: All traffic
+      result: "12"
+    allowed_range: 0 up to the number of projects.
+    validation: Calculated only. Shown before anything is switched on.
+    prd_ref: UX-7 (impact preview), FR-22
+
+  kill.impact_agents:
+    name: Agents affected
+    meaning: How many agents would have requests refused. For a vendor it counts agents that used the vendor in the last 24 hours.
+    unit: Whole number of agents.
+    source: calculated
+    source_detail: Calculated from the registered agents and the gateway's recent decisions.
+    formula: |
+      all traffic: every registered agent
+      project:     the project's agents
+      vendor:      agents with a gateway decision for one of the vendor's models
+                   in the last 24 hours
+    formula_fn: kill_impact_agents
+    worked_example:
+      description: A switch for all traffic in the demo data.
+      inputs:
+        scope: All traffic
+      result: "12"
+    allowed_range: 0 up to the number of agents.
+    validation: Calculated only. Shown before anything is switched on.
+    prd_ref: UX-7 (impact preview), FR-22
+
+  kill.impact_requests:
+    name: Requests in the last 5 minutes
+    meaning: How many requests in scope reached the gateway in the last five minutes. It shows how much traffic the switch would stop right now.
+    unit: Whole number of requests.
+    source: calculated
+    source_detail: Counted from the gateway's decision records.
+    formula: |
+      requests = gateway decisions in scope with occurred_at > now - 5 minutes
+    formula_fn: kill_impact_requests
+    worked_example:
+      description: The demo data before any traffic was sent.
+      inputs:
+        scope: All traffic
+        now: "2026-01-15T09:00:00Z"
+      result: "0"
+    allowed_range: 0 or more.
+    validation: Calculated only.
+    prd_ref: UX-7 (traffic in the last five minutes), FR-22
+
+  # --- Phase 6: reports and the audit record ---------------------------------------
+  showback.department:
+    name: Department
+    meaning: The department the project's team belongs to.
+    unit: Name of the department.
+    source: seed script
+    source_detail: From the organization hierarchy.
+    worked_example:
+      description: The Build Assistant project in the demo data.
+      result: Engineering
+    allowed_range: A department of the organization.
+    validation: Recorded only.
+    prd_ref: FR-12 (reporting), FR-04 (hierarchy)
+
+  showback.team:
+    name: Team
+    meaning: The team that owns the project.
+    unit: Name of the team.
+    source: seed script
+    source_detail: From the organization hierarchy.
+    worked_example:
+      description: The Build Assistant project in the demo data.
+      result: Platform
+    allowed_range: A team of the organization.
+    validation: Recorded only.
+    prd_ref: FR-12 (reporting), FR-04 (hierarchy)
+
+  audit.records:
+    name: Records
+    meaning: How many actions the audit log holds.
+    unit: Whole number of records.
+    source: system
+    source_detail: Counted from the audit log.
+    worked_example:
+      description: The demo data holds the creation of 5 users and 3 blocks.
+      result: "8"
+    allowed_range: 0 or more. It only grows.
+    validation: Records cannot be edited or deleted from the application.
+    prd_ref: FR-12 (audit log), SEC-31
+
+  audit.verify_result:
+    name: Chain check
+    meaning: Whether every record still matches its hash and follows the record before it. A changed, removed or inserted record breaks the chain at that point.
+    unit: Chain verified, or Chain broken with the number of the first bad record.
+    source: calculated
+    source_detail: Recomputed from every record when the button is pressed.
+    formula: |
+      row_hash(n) = SHA-256(row_hash(n-1) || canonical(record n))
+      verified    = every stored row_hash equals the recomputed one,
+                    record numbers have no gap, and the last one equals the chain head
+    formula_fn: audit_verify
+    worked_example:
+      description: The demo data as seeded.
+      inputs:
+        records: "8"
+      result: Chain verified
+    allowed_range: Verified or broken.
+    validation: A broken chain raises the SEV1 alert AUDIT_CHAIN_BROKEN. Someone with full database rights could rewrite the whole chain, which needs a head stored outside the database to detect.
+    prd_ref: SEC-32 (tamper-evident audit), FR-12
+
+  audit.seq:
+    name: No.
+    meaning: The position of the record in the chain. Numbers have no gaps.
+    unit: Whole number, starting at 1.
+    source: system
+    source_detail: Assigned when the record is appended.
+    worked_example:
+      description: The first record of the demo data.
+      result: "1"
+    allowed_range: 1 or more.
+    validation: A missing number is reported by the chain check.
+    prd_ref: SEC-32 (hash chain), FR-12
+
+  audit.occurred_at:
+    name: Time
+    meaning: When the action happened.
+    unit: Date and time, ISO 8601, stored in UTC. Shown as YYYY-MM-DD HH:MM:SS UTC.
+    source: system
+    source_detail: Written with the action, in the same database transaction.
+    worked_example:
+      description: The vendor-b block in the demo data, two days before the demo clock.
+      result: "2026-01-13 09:00:00 UTC"
+    allowed_range: Any past time.
+    validation: Part of the hash, so it cannot be changed unnoticed.
+    prd_ref: SEC-31 (security audit events), FR-12
+
+  audit.actor:
+    name: Who
+    meaning: The signed-in user who did it. Two names mean a two-person action.
+    unit: User name. "seed" for demo data, "system" for an expiry.
+    source: system
+    source_detail: Taken from the session, never from the form.
+    worked_example:
+      description: The vendor-b block in the demo data.
+      result: alice.admin
+    allowed_range: A user, two users, seed or system.
+    validation: Part of the hash.
+    prd_ref: SEC-31, SEC-15
+
+  audit.action:
+    name: Action
+    meaning: What was done, as a stable code.
+    unit: Code of the form area.action.
+    source: system
+    source_detail: Set by the code that performs the action.
+    worked_example:
+      description: The vendor-b block in the demo data.
+      result: registry.blocked
+    allowed_range: Sign-in, users, registry, budgets, approvals, kill switch, credentials, billing, exports, audit checks.
+    validation: Part of the hash.
+    prd_ref: SEC-31 (admin, policy, budget, owner, override and kill switch actions)
+
+  audit.subject:
+    name: On what
+    meaning: The thing the action was about.
+    unit: Kind and identifier.
+    source: system
+    source_detail: Set by the code that performs the action.
+    worked_example:
+      description: The vendor-b block in the demo data.
+      result: vendor vendor-b
+    allowed_range: A user, vendor, model, budget, kill switch, credential, report or record.
+    validation: Part of the hash.
+    prd_ref: SEC-31, FR-12
+
+  audit.change:
+    name: Before and after
+    meaning: The values the action changed, before and after it.
+    unit: Two short lists of names and values.
+    source: system
+    source_detail: Written with the action.
+    worked_example:
+      description: The vendor-b block in the demo data.
+      result: 'Before {"status": "ALLOWED"} After {"status": "BLOCKED"}'
+    allowed_range: Either part may be empty.
+    validation: Secrets such as passwords, tokens and authenticator secrets are never written here.
+    prd_ref: SEC-31, SEC-34
+
+  audit.hash:
+    name: Hash
+    meaning: The first 12 characters of the record's hash. The full hash covers this record and the hash of the record before it.
+    unit: 12 hexadecimal characters of a SHA-256 hash.
+    source: system
+    source_detail: Calculated once, when the record is appended.
+    worked_example:
+      description: The form of a shortened hash.
+      result: 3fa9c1d07b2e  # pragma: allowlist secret (an example of the format)
+    allowed_range: Hexadecimal characters.
+    validation: Recomputed by the chain check.
+    prd_ref: SEC-32 (hash chain), FR-12

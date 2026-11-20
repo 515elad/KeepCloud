@@ -1,13 +1,21 @@
-"""FastAPI application: server-rendered UI shell (phase 0)."""
+"""FastAPI application: the server-rendered UI.
+
+Every route is listed in ``keepair.web.access.ROUTE_PERMS`` with the permission
+it needs. One middleware checks the session and the role before any handler
+runs; a route that is not listed is refused (FR-13, SEC-14).
+"""
 
 from __future__ import annotations
 
 import uuid
+from contextvars import ContextVar
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -15,8 +23,9 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoes
 from sqlalchemy import Engine, func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
+from starlette.routing import Match, Mount
 
-from keepair import __version__
+from keepair import __version__, audit, iam
 from keepair.billing import reconcile
 from keepair.billing.finalization import SOURCES
 from keepair.billing.focus import MAX_BYTES, Quarantine
@@ -31,6 +40,7 @@ from keepair.health import ComponentHealth, read_health, record_heartbeat, unkno
 from keepair.help_registry import HelpRegistry
 from keepair.ids import uuid7
 from keepair.metrics import Metrics
+from keepair.permissions import ROLE_LABEL, Perm, allowed
 from keepair.registry import RegistryError, add_block
 from keepair.rng import system_rng
 from keepair.schema import (
@@ -42,7 +52,16 @@ from keepair.schema import (
     normalized_cost_records,
     projects,
 )
-from keepair.web import spend_views, views
+from keepair.startup import refuse_test_material
+from keepair.web import (
+    auth_routes,
+    control_routes,
+    control_views,
+    record_routes,
+    spend_views,
+    views,
+)
+from keepair.web.access import PAGE_PERMS, ROUTE_PERMS
 from keepair.web.formatting import format_ts
 from keepair.web.helpui import HelpContext
 from keepair.web.pages import PAGES, PAGES_BY_SLUG, Page
@@ -59,8 +78,10 @@ SECURITY_HEADERS = {
 
 
 MAX_FORM_BYTES = 4096
-# No sign-in exists until phase 5, so UI changes are recorded under this name.
-UI_ACTOR = "demo-operator"
+AUTHZ_DENIED_TOTAL = "keepair_authz_denied_total"
+STEP_UP_FAILED_TOTAL = "keepair_step_up_failed_total"
+# The signed-in user of the request being handled. Set by the middleware only.
+_ACTOR: ContextVar[iam.Actor | None] = ContextVar("keepair_actor", default=None)
 
 
 def same_origin(request: Request) -> bool:
@@ -86,6 +107,7 @@ class PageState:
     tenant_id: uuid.UUID | None = None
     fail_open: views.FailOpenState = field(default_factory=views.FailOpenState)
     alerts: list[Alert] = field(default_factory=list)
+    kill_switches: list = field(default_factory=list)  # switches that are on (UX-7)
 
 
 def create_app(
@@ -99,11 +121,18 @@ def create_app(
     engine = engine or make_engine(settings)
     clock = clock or SystemClock()
     metrics = metrics or Metrics()
+    refuse_test_material(engine, settings)
     # Loading validates every entry; a broken registry stops startup.
     registry = HelpRegistry.load(settings.ui_dir / "help" / "field_help.yaml")
     store = AlertStore(engine, clock, metrics)
     reporter = FailureReporter(store, metrics, clock)
     token_rng = system_rng()
+    box = iam.SecretBox(iam.load_mfa_key(settings.mfa_key, settings.env))
+    demo_enabled = settings.demo_mode and settings.env != "prod"
+    metrics.describe(AUTHZ_DENIED_TOTAL, "Requests refused because the role does not allow them.")
+    metrics.describe(
+        STEP_UP_FAILED_TOTAL, "Sensitive actions refused for a bad authenticator code."
+    )
     gateway_http = gateway_client or httpx.Client(
         base_url=settings.gateway_url, timeout=1.5, trust_env=False
     )
@@ -131,16 +160,84 @@ def create_app(
     app.state.registry = registry
     app.mount("/static", StaticFiles(directory=settings.ui_dir / "static"), name="static")
 
+    def route_perm(request: Request) -> Perm | str | None:
+        """The permission of the route this request will reach.
+
+        None: no route matches, so the request ends as a 404. "missing": a route
+        matches but names no permission, which is refused.
+        """
+        for route in app.router.routes:
+            match, _ = route.matches(request.scope)
+            if match == Match.FULL:
+                if isinstance(route, Mount):
+                    return Perm.PUBLIC  # static files
+                return ROUTE_PERMS.get((request.method, route.path), "missing")
+        return None
+
+    def session_actor(token: str | None) -> iam.Actor | None:
+        with engine.begin() as conn:
+            return iam.authenticate(conn, clock, token)
+
+    def outage_page() -> HTMLResponse:
+        """The database cannot be reached, so nobody can be authenticated. This page
+        shows the outage and nothing else: no page data, only this failure's alert."""
+        store.note_db_down()
+        reporter.report(
+            "DATABASE_UNREACHABLE",
+            "The database could not be reached. Nobody can be signed in and no page data "
+            "can be read, so every component is shown as Unknown.",
+        )
+        state = PageState(health=unknown_health(), database_reachable=False)
+        state.fail_open = views.fail_open_from_status(gateway_status())
+        state.alerts = [a for a in store.recent() if a.code == "DATABASE_UNREACHABLE"]
+        return render("outage.html", status_code=503, state=state)
+
     @app.middleware("http")
-    async def security_headers(request: Request, call_next):
+    async def security(request: Request, call_next):
+        response, reset = None, None
         if request.method not in ("GET", "HEAD", "OPTIONS") and not same_origin(request):
             # Forms may only be posted from this site's own pages (TB-9, CSRF).
             response = PlainTextResponse("Cross-site request refused.", status_code=403)
         else:
-            response = await call_next(request)
+            perm = route_perm(request)
+            if perm == "missing":
+                response = render(
+                    "error.html", status_code=403, heading="Not allowed",
+                    detail="This address has no permission entry, so it is refused.",
+                )  # fmt: skip
+            elif perm is not None and perm is not Perm.PUBLIC:
+                try:
+                    actor = await run_in_threadpool(session_actor, request.cookies.get(iam.COOKIE))
+                except SQLAlchemyError:
+                    response = await run_in_threadpool(outage_page)
+                else:
+                    if actor is None:
+                        response = RedirectResponse("/login", status_code=303)
+                    elif not allowed(actor.role, perm):
+                        metrics.inc(AUTHZ_DENIED_TOTAL, permission=perm.value)
+                        reset = _ACTOR.set(actor)
+                        response = render(
+                            "error.html", status_code=403, heading="Your role does not allow this",
+                            detail=f"You are signed in as {actor.username} "
+                            f"({ROLE_LABEL[actor.role]}). This page or action needs another role.",
+                        )  # fmt: skip
+                    else:
+                        reset = _ACTOR.set(actor)
+        try:
+            if response is None:
+                response = await call_next(request)
+        finally:
+            if reset is not None:
+                _ACTOR.reset(reset)
         for name, value in SECURITY_HEADERS.items():
             response.headers.setdefault(name, value)
         return response
+
+    def current_actor() -> iam.Actor:
+        actor = _ACTOR.get()
+        if actor is None:  # a handler ran without the middleware: refuse
+            raise HTTPException(status_code=403)
+        return actor
 
     def load_state() -> PageState:
         fail_open = views.fail_open_from_status(gateway_status())
@@ -153,6 +250,7 @@ def create_app(
                 if "tenant_id" in meta:
                     state.tenant_id = uuid.UUID(meta["tenant_id"])
                     views.add_unacknowledged(conn, state.tenant_id, fail_open)
+                    state.kill_switches = control_views.active_switches(conn, state.tenant_id)
         except SQLAlchemyError:
             store.note_db_down()
             reporter.report(
@@ -166,11 +264,23 @@ def create_app(
         return state
 
     def render(template: str, status_code: int = 200, **context) -> HTMLResponse:
+        actor = _ACTOR.get()
+        demo_code = None
+        if actor is not None and demo_enabled:
+            try:
+                with engine.connect() as conn:
+                    demo_code = iam.demo_code(conn, clock, box, actor.id)
+            except SQLAlchemyError:
+                demo_code = None
         html = env.get_template(template).render(
-            pages=PAGES,
+            # Only the pages this role may open are in the navigation.
+            pages=[p for p in PAGES if actor and allowed(actor.role, PAGE_PERMS[p.slug])],
             demo_mode=settings.demo_mode,
             version=__version__,
             help=HelpContext(registry),
+            user=actor,
+            role_label=ROLE_LABEL[actor.role] if actor else None,
+            demo_code=demo_code,
             **context,
         )
         return HTMLResponse(html, status_code=status_code)
@@ -181,9 +291,47 @@ def create_app(
             return render("page.html", page=page, state=state)
         try:
             summary = spend_context(state, None)
+            with engine.connect() as conn:
+                summary["unowned"] = (
+                    control_views.unowned(conn, state.tenant_id, summary.get("period"))
+                    if state.tenant_id
+                    else None
+                )
         except SQLAlchemyError:
-            summary = {"period": None}  # the page's own notice already says the database is down
+            # The page's own notice already says the database is down.
+            summary = {"period": None, "unowned": None}
         return render("overview.html", page=page, state=state, **summary)
+
+    def record(conn, state: PageState, action: str, subject_type: str, subject_id: str,
+               **details) -> None:  # fmt: skip
+        """Append to the audit record, in the transaction of the action itself (SEC-31)."""
+        actor = current_actor()
+        audit.record(
+            conn, clock, tenant_id=state.tenant_id, actor=actor.username, actor_id=actor.id,
+            action=action, subject_type=subject_type, subject_id=subject_id, **details,
+        )  # fmt: skip
+
+    def step_up_ok(form: dict[str, str]) -> bool:
+        """SEC-13: a fresh authenticator code, given in the same form. Accepted once."""
+        with engine.begin() as conn:
+            return iam.step_up(conn, clock, box, current_actor(), form.get("totp", ""))
+
+    def step_up_refused() -> HTMLResponse:
+        metrics.inc(STEP_UP_FAILED_TOTAL)
+        with engine.connect() as conn:
+            locked = iam.is_locked(conn, clock, current_actor().username)
+        if locked:
+            reporter.report(
+                "ACCOUNT_LOCKED",
+                "An account was locked for 15 minutes after 5 failed authenticator codes. "
+                "See the audit record for the account.",
+                dedupe_s=60,
+            )
+        return render(
+            "error.html", status_code=403, heading="Authenticator code not accepted",
+            detail="This action needs a fresh code from your authenticator. The code was missing, "
+            "wrong, or already used. Nothing was changed. Go back and enter the next code.",
+        )  # fmt: skip
 
     @app.get("/", response_class=HTMLResponse)
     def overview() -> HTMLResponse:
@@ -224,7 +372,8 @@ def create_app(
             row = next((r for r in rows if r.id == budget_id), None)
         if row is None and state.database_reachable:
             raise HTTPException(status_code=404)
-        return render("budget_detail.html", page=page, state=state, row=row)
+        return render("budget_detail.html", page=page, state=state, row=row,
+                      **control_routes.budget_forms(ctx, state, row))  # fmt: skip
 
     def load_registry(state: PageState) -> views.RegistryView | None:
         if not state.tenant_id:
@@ -238,7 +387,14 @@ def create_app(
             with engine.connect() as conn:
                 activity = views.load_activity(conn, state.tenant_id, clock.now())
                 credentials = views.load_credentials(conn, state.tenant_id)
-        return {"registry": load_registry(state), "activity": activity, "credentials": credentials}
+        lifts = {}
+        if state.tenant_id:
+            with engine.connect() as conn:
+                lifts = control_views.pending_lifts(conn, state.tenant_id)
+        return {
+            "registry": load_registry(state), "activity": activity, "credentials": credentials,
+            "lifts": lifts,
+        }  # fmt: skip
 
     @app.get("/gateway", response_class=HTMLResponse)
     def gateway_page(auto: int = 0) -> HTMLResponse:
@@ -289,6 +445,7 @@ def create_app(
                     expires_at=func.now() + text("interval '90 days'"),
                 )
             )
+            record(conn, state, "credential.created", "agent", agent, after={"label": label})
         response = render(
             "credential_created.html", page=page, state=state, token=token, agent=agent, label=label
         )
@@ -310,8 +467,9 @@ def create_app(
                 )
                 .values(revoked_at=func.now())
             )
-        if result.rowcount != 1:
-            raise HTTPException(status_code=404)
+            if result.rowcount != 1:
+                raise HTTPException(status_code=404)
+            record(conn, state, "credential.revoked", "credential", str(credential_id))
         return RedirectResponse("/gateway#credentials-title", status_code=303)
 
     def block_form(
@@ -355,9 +513,19 @@ def create_app(
         state = load_state()
         if not state.tenant_id:
             raise HTTPException(status_code=404)
+        if not step_up_ok(form):
+            return step_up_refused()
+        actor = current_actor()
         try:
             with engine.begin() as conn:
-                add_block(conn, state.tenant_id, subject_type, subject_id, UI_ACTOR, reason, clock)
+                add_block(
+                    conn, state.tenant_id, subject_type, subject_id, actor.username, reason, clock
+                )
+                record(
+                    conn, state, "registry.blocked", subject_type, subject_id,
+                    before={"status": "ALLOWED"}, after={"status": "BLOCKED"},
+                    reason=" ".join(reason.split()),
+                )  # fmt: skip
         except RegistryError as exc:
             return block_form(subject_type, subject_id, reason, str(exc))
         return RedirectResponse(f"/gateway#{subject_type}s-title", status_code=303)
@@ -418,16 +586,26 @@ def create_app(
             with engine.begin() as conn:
                 result = ingest(
                     conn, tenant_id=state.tenant_id, source=source, file_name=file_name,
-                    data=data, actor=UI_ACTOR, clock=clock, rng=token_rng,
+                    data=data, actor=current_actor().username, clock=clock, rng=token_rng,
                 )  # fmt: skip
                 record_heartbeat(conn, "data_sources", clock)
+                record(
+                    conn, state, "billing.file_loaded", "ingestion_batch", str(result.batch_id),
+                    after={"source": source, "file": file_name, "rows": result.rows_total,
+                           "new": result.rows_new, "revised": result.rows_revised},
+                )  # fmt: skip
                 findings = reconcile.uncontrolled_projects(conn, state.tenant_id)
         except Quarantine as bad:
             failed = BatchResult(uuid7(clock, token_rng), "QUARANTINED", reasons=bad.reasons)
             with engine.begin() as conn:
                 record_batch(
                     conn, state.tenant_id, source if source in SOURCES else "unknown",
-                    file_name, data, failed, UI_ACTOR, clock,
+                    file_name, data, failed, current_actor().username, clock,
+                )  # fmt: skip
+                record(
+                    conn, state, "billing.file_refused", "ingestion_batch", str(failed.batch_id),
+                    after={"source": source[:40], "file": file_name,
+                           "reasons": len(bad.reasons)},
                 )  # fmt: skip
             reporter.report(
                 "INGEST_QUARANTINED",
@@ -462,31 +640,37 @@ def create_app(
         if not state.tenant_id or not 10 <= len(reason) <= 300:
             raise HTTPException(status_code=422)
         n = normalized_cost_records
+        actor_name = current_actor().username
         with engine.begin() as conn:
-            record = conn.execute(
+            found = conn.execute(
                 select(n.c.source, n.c.record_key).where(
                     n.c.id == record_id, n.c.tenant_id == state.tenant_id, n.c.is_current
                 )
             ).one_or_none()
             known = conn.execute(
-                select(projects.c.id).where(
+                select(projects.c.id, projects.c.name).where(
                     projects.c.id == project_id, projects.c.tenant_id == state.tenant_id
                 )
             ).one_or_none()
-            if record is None or known is None:
+            if found is None or known is None:
                 raise HTTPException(status_code=404)
             stmt = pg_insert(manual_allocations).values(
-                tenant_id=state.tenant_id, source=record.source, record_key=record.record_key,
-                project_id=project_id, actor=UI_ACTOR, reason=reason, assigned_at=clock.now(),
+                tenant_id=state.tenant_id, source=found.source, record_key=found.record_key,
+                project_id=project_id, actor=actor_name, reason=reason, assigned_at=clock.now(),
             )  # fmt: skip
             conn.execute(
                 stmt.on_conflict_do_update(
                     index_elements=["tenant_id", "source", "record_key"],
-                    set_={"project_id": project_id, "actor": UI_ACTOR, "reason": reason,
+                    set_={"project_id": project_id, "actor": actor_name, "reason": reason,
                           "assigned_at": clock.now()},
                 )
             )  # fmt: skip
             reallocate(conn, state.tenant_id, [record_id], clock)
+            record(
+                conn, state, "billing.record_assigned", "billing_record",
+                f"{found.source}:{found.record_key}", after={"project": known.name},
+                reason=reason,
+            )  # fmt: skip
         return RedirectResponse("/spend#queue-title", status_code=303)
 
     # --- Fail-open: status for the banner, report, acknowledgement (UX-7) -----------
@@ -513,28 +697,32 @@ def create_app(
             # Not over yet: there is nothing complete to acknowledge.
             raise HTTPException(status_code=409)
         with engine.begin() as conn:
-            conn.execute(
+            done = conn.execute(
                 update(fail_events)
                 .where(
                     fail_events.c.tenant_id == state.tenant_id,
                     fail_events.c.acknowledged_at.is_(None),
                 )
-                .values(acknowledged_at=func.now(), acknowledged_by=UI_ACTOR)
+                .values(acknowledged_at=func.now(), acknowledged_by=current_actor().username)
             )
+            record(conn, state, "fail_open.acknowledged", "fail_open", "events",
+                   after={"events": done.rowcount})  # fmt: skip
         return RedirectResponse("/gateway/fail-open", status_code=303)
 
     # --- Demo console (demo mode only) ---------------------------------------------
 
-    def admin_page(console_results=None, console_error=None, status_code=200) -> HTMLResponse:
+    def admin_page(console_results=None, console_error=None, status_code=200,
+                   **extra) -> HTMLResponse:  # fmt: skip
         page, state = page_context("admin")
         return render(
             "admin.html",
             status_code=status_code,
             page=page,
             state=state,
-            demo_console=settings.demo_mode and settings.env != "prod",
+            demo_console=demo_enabled and allowed(current_actor().role, Perm.DEMO_CONSOLE),
             console_results=console_results,
             console_error=console_error,
+            **{**control_routes.admin_context(ctx, state), **extra},
         )
 
     @app.get("/admin", response_class=HTMLResponse)
@@ -542,7 +730,7 @@ def create_app(
         return admin_page()
 
     def require_demo() -> None:
-        if not settings.demo_mode or settings.env == "prod":
+        if not demo_enabled:
             raise HTTPException(status_code=404)
 
     @app.post("/admin/demo/ledger", response_class=HTMLResponse)
@@ -559,6 +747,9 @@ def create_app(
             return admin_page(
                 console_error="The gateway did not answer. Is it running?", status_code=502
             )
+        with engine.begin() as conn:
+            record(conn, load_state(), "demo.ledger_fault", "gateway", "ledger",
+                   after={"simulated_outage": action == "stop"})  # fmt: skip
         return RedirectResponse("/admin#console-title", status_code=303)
 
     @app.post("/admin/demo/requests", response_class=HTMLResponse)
@@ -601,6 +792,17 @@ def create_app(
                 console_error="The gateway did not answer. Is it running?", status_code=502
             )
         return admin_page(console_results=results)
+
+    ctx = SimpleNamespace(
+        app=app, settings=settings, engine=engine, clock=clock, rng=token_rng, box=box,
+        metrics=metrics, reporter=reporter, render=render, page_context=page_context,
+        load_state=load_state, read_form=read_form, actor=current_actor, record=record,
+        step_up_ok=step_up_ok, step_up_refused=step_up_refused, demo_enabled=demo_enabled,
+        admin_page=admin_page, spend_context=spend_context, actor_or_none=_ACTOR.get,
+    )  # fmt: skip
+    auth_routes.register(ctx)
+    control_routes.register(ctx)
+    record_routes.register(ctx)
 
     @app.get("/{slug}", response_class=HTMLResponse)
     def page(slug: str) -> HTMLResponse:

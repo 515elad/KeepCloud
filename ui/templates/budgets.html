@@ -7,12 +7,13 @@
   <div class="table-wrap" tabindex="0" role="region" aria-labelledby="tree-title">
     <table class="dense" data-table="budgets">
       <thead>
-        <tr>{{ help.th("budget.scope") }}{{ help.th("project.coverage") }}{{ help.th("budget.policy") }}{{ help.th("budget.mode") }}{{ help.th("budget.period") }}{{ help.th("budget.cap") }}{{ help.th("budget.usage") }}{{ help.th("budget.remaining") }}{{ help.th("budget.effective_remaining") }}</tr>
+        <tr>{{ help.th("budget.scope") }}{{ help.th("budget.owner") }}{{ help.th("project.coverage") }}{{ help.th("budget.policy") }}{{ help.th("budget.mode") }}{{ help.th("budget.period") }}{{ help.th("budget.cap") }}{{ help.th("budget.usage") }}{{ help.th("budget.remaining") }}{{ help.th("budget.effective_remaining") }}</tr>
       </thead>
       <tbody>
         {% for row in rows %}
         <tr data-budget-id="{{ row.id }}" data-scope-type="{{ row.scope_type }}">
           <td class="depth-{{ row.depth }}"><a href="/budgets/{{ row.id }}">{{ row.name }}</a><span class="sub">{{ row.scope_label }}</span></td>
+          <td data-owner>{% if row.owner %}{{ row.owner }}{% else %}<span class="reg reg--unregistered"><span aria-hidden="true">?</span> Unowned</span>{% endif %}</td>
           <td>{% if row.coverage %}{{ coverage_badge(row.coverage) }}{% else %}<span aria-hidden="true">–</span><span class="sr-only">Projects only</span>{% endif %}</td>
           <td><span class="policy policy--{{ row.policy | lower }}">{{ row.policy_label }}</span></td>
           <td>{{ row.mode_label }}</td>
