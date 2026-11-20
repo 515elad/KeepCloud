@@ -51,7 +51,7 @@ Lifecycle record, aligned with ISO/IEC 12207 (plan, entry and exit criteria, rev
 | Demo console stops and restores the ledger | `test_demo_console_shows_what_an_outage_changes`, and a browser check | Pass |
 | Banner appears within 5 seconds | Measured in Chromium against the Docker stack: 4.0 s on a second open page | Pass |
 | Every new failure path has metric, alert and UI row; every new field has help | `tests/system/test_failure_visibility.py` (14 codes), `tests/system/test_field_help.py` | Pass |
-| Lint, secret scan and all tests pass | 380 tests, 0 failures | Pass locally; CI result recorded below |
+| Lint, secret scan and all tests pass | 380 tests, 0 failures | Pass locally and in CI (commit `e571de8`) |
 
 Bypass route B-m (fail-open used silently) is now covered: `test_fail_open_is_counted_alerted_and_audited`.
 
