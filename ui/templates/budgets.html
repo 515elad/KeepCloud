@@ -3,7 +3,7 @@
 {% if rows %}
 <section aria-labelledby="tree-title">
   <h2 id="tree-title">Budget hierarchy</h2>
-  <p class="hint">Amounts are seeded demo values until the gateway records real requests in phase 2. Projects are labelled {{ coverage_badge(rows | selectattr("coverage") | map(attribute="coverage") | first) }} because egress control is not verified. Bar marks are at 50, 80, 90 and 100% of the cap. {{ pending("UX-D1") }}</p>
+  <p class="hint">Amounts are the seeded opening values plus everything the gateway has reserved and settled since. Projects are labelled {{ coverage_badge(rows | selectattr("coverage") | map(attribute="coverage") | first) }} because egress control is not verified. Bar marks are at 50, 80, 90 and 100% of the cap. {{ pending("UX-D1") }}</p>
   <div class="table-wrap" tabindex="0" role="region" aria-labelledby="tree-title">
     <table class="dense" data-table="budgets">
       <thead>

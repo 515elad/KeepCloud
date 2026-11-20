@@ -11,7 +11,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
-from sqlalchemy import Engine, select
+from sqlalchemy import Engine, func, insert, select, text, update
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from keepair import __version__
@@ -19,11 +19,14 @@ from keepair.clock import Clock, SystemClock, from_iso
 from keepair.config import Settings
 from keepair.db import make_engine
 from keepair.failures import Alert, AlertStore, FailureReporter
+from keepair.gateway.tokens import generate_token, hash_token
 from keepair.health import ComponentHealth, read_health, unknown_health
 from keepair.help_registry import HelpRegistry
+from keepair.ids import uuid7
 from keepair.metrics import Metrics
 from keepair.registry import RegistryError, add_block
-from keepair.schema import app_meta
+from keepair.rng import system_rng
+from keepair.schema import agents, app_meta, gateway_credentials
 from keepair.web import views
 from keepair.web.formatting import format_ts
 from keepair.web.helpui import HelpContext
@@ -35,7 +38,7 @@ SECURITY_HEADERS = {
         "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
     ),
     "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "no-referrer",
+    "Referrer-Policy": "same-origin",
     "X-Frame-Options": "DENY",
 }
 
@@ -46,6 +49,14 @@ UI_ACTOR = "demo-operator"
 
 
 def same_origin(request: Request) -> bool:
+    """True when a state-changing request comes from one of this site's own pages.
+
+    Browsers state this themselves in Sec-Fetch-Site, which page script cannot set.
+    Clients that do not send it must show a matching Origin or Referer.
+    """
+    fetch_site = request.headers.get("sec-fetch-site")
+    if fetch_site is not None:
+        return fetch_site == "same-origin"
     source = request.headers.get("origin") or request.headers.get("referer")
     if not source:
         return False
@@ -75,6 +86,7 @@ def create_app(
     registry = HelpRegistry.load(settings.ui_dir / "help" / "field_help.yaml")
     store = AlertStore(engine, clock, metrics)
     reporter = FailureReporter(store, metrics, clock)
+    token_rng = system_rng()
 
     env = Environment(
         loader=FileSystemLoader(settings.ui_dir / "templates"),
@@ -179,10 +191,87 @@ def create_app(
         with engine.connect() as conn:
             return views.load_registry(conn, state.tenant_id)
 
+    def gateway_context(state: PageState) -> dict:
+        activity = credentials = None
+        if state.tenant_id:
+            with engine.connect() as conn:
+                activity = views.load_activity(conn, state.tenant_id, clock.now())
+                credentials = views.load_credentials(conn, state.tenant_id)
+        return {"registry": load_registry(state), "activity": activity, "credentials": credentials}
+
     @app.get("/gateway", response_class=HTMLResponse)
-    def gateway_page() -> HTMLResponse:
+    def gateway_page(auto: int = 0) -> HTMLResponse:
         page, state = page_context("gateway")
-        return render("gateway.html", page=page, state=state, registry=load_registry(state))
+        return render(
+            "gateway.html",
+            page=page,
+            state=state,
+            auto_refresh=bool(auto),
+            **gateway_context(state),
+        )
+
+    async def read_form(request: Request) -> dict[str, str]:
+        body = await request.body()
+        if len(body) > MAX_FORM_BYTES:
+            raise HTTPException(status_code=413)
+        return {k: v[0] for k, v in parse_qs(body.decode("utf-8", "replace")).items()}
+
+    @app.post("/gateway/credentials", response_class=HTMLResponse)
+    async def credential_create(request: Request) -> HTMLResponse:
+        """Create a credential. The token is shown in this response only and is never stored."""
+        form = await read_form(request)
+        page, state = page_context("gateway")
+        label = " ".join(form.get("label", "").split())
+        try:
+            agent_id = uuid.UUID(form.get("agent_id", ""))
+        except ValueError:
+            raise HTTPException(status_code=404) from None
+        if not state.tenant_id or not 1 <= len(label) <= 60:
+            raise HTTPException(status_code=422)
+        token = generate_token(token_rng)
+        with engine.begin() as conn:
+            agent = conn.execute(
+                select(agents.c.name).where(
+                    agents.c.id == agent_id, agents.c.tenant_id == state.tenant_id
+                )
+            ).scalar_one_or_none()
+            if agent is None:
+                raise HTTPException(status_code=404)
+            conn.execute(
+                insert(gateway_credentials).values(
+                    id=uuid7(clock, token_rng),
+                    tenant_id=state.tenant_id,
+                    token_hash=hash_token(token),
+                    agent_id=agent_id,
+                    label=label,
+                    created_at=func.now(),
+                    expires_at=func.now() + text("interval '90 days'"),
+                )
+            )
+        response = render(
+            "credential_created.html", page=page, state=state, token=token, agent=agent, label=label
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.post("/gateway/credentials/{credential_id}/revoke")
+    async def credential_revoke(credential_id: uuid.UUID, request: Request):
+        state = load_state()
+        if not state.tenant_id:
+            raise HTTPException(status_code=404)
+        with engine.begin() as conn:
+            result = conn.execute(
+                update(gateway_credentials)
+                .where(
+                    gateway_credentials.c.id == credential_id,
+                    gateway_credentials.c.tenant_id == state.tenant_id,
+                    gateway_credentials.c.revoked_at.is_(None),
+                )
+                .values(revoked_at=func.now())
+            )
+        if result.rowcount != 1:
+            raise HTTPException(status_code=404)
+        return RedirectResponse("/gateway#credentials-title", status_code=303)
 
     def block_form(
         subject_type: str, subject_id: str, reason: str = "", error: str | None = None
@@ -219,10 +308,7 @@ def create_app(
 
     @app.post("/gateway/block")
     async def block_submit(request: Request):
-        body = await request.body()
-        if len(body) > MAX_FORM_BYTES:
-            raise HTTPException(status_code=413)
-        form = {k: v[0] for k, v in parse_qs(body.decode("utf-8", "replace")).items()}
+        form = await read_form(request)
         subject_type, subject_id = form.get("type", ""), form.get("id", "")
         reason = form.get("reason", "")
         state = load_state()

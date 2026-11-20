@@ -30,11 +30,25 @@ def walk_paths(ui) -> list[str]:
     return [*ALL_PATHS, *budget_links, *forms]
 
 
-def test_every_field_column_and_kpi_has_a_registry_entry_and_an_i_button(ui):
+def test_every_field_column_and_kpi_has_a_registry_entry_and_an_i_button(ui_traffic):
+    ui = ui_traffic
     paths = walk_paths(ui)
     assert len(paths) == len(ALL_PATHS) + 22 + 2
     for path in paths:
         check_fields(ui.soup(path), path)
+
+
+def test_pages_reached_only_by_post_also_have_help_on_every_field(ui):
+    agent_id = ui.soup("/gateway").select_one("select[name=agent_id] option")["value"]
+    response = ui.client.post(
+        "/gateway/credentials",
+        data={"agent_id": agent_id, "label": "walk"},
+        headers={"Origin": "http://testserver"},
+    )
+    assert response.status_code == 200
+    soup = BeautifulSoup(response.text, "html.parser")
+    check_fields(soup, "POST /gateway/credentials")
+    assert soup.select_one('[data-kpi][data-field-id="credential.token"]')
 
 
 def check_fields(soup, path):
@@ -51,11 +65,13 @@ def check_fields(soup, path):
         assert popover["data-help-id"] == field_id
 
 
-def test_the_walk_actually_finds_fields(ui):
+def test_the_walk_actually_finds_fields(ui_traffic):
+    ui = ui_traffic
     seen = {el["data-field-id"] for p in walk_paths(ui) for el in fields_on(ui.soup(p))}
     assert "health.status" in seen and "alert.code" in seen
     # Every registry entry is in use somewhere: no dead help text.
-    assert seen == REGISTRY.ids()
+    # (credential.token is on a page reached by POST only; it has its own test.)
+    assert seen == REGISTRY.ids() - {"credential.token"}
 
 
 def test_walk_fails_for_a_field_without_help():
@@ -63,17 +79,14 @@ def test_walk_fails_for_a_field_without_help():
     assert [el.get("data-field-id") for el in fields_on(soup)] == [None]
 
 
-def test_popover_shows_every_required_part(ui):
+def test_popover_shows_every_required_part(ui_traffic):
+    ui = ui_traffic
     popovers = [
         p
         for path in walk_paths(ui)[:9] + walk_paths(ui)[-2:]
         for p in ui.soup(path).select(".help[popover]")
     ]
-    assert {p["data-help-id"] for p in popovers} >= REGISTRY.ids() - {
-        "budget.committed",
-        "budget.reserved",
-        "budget.enforcing",
-    }
+    assert {p["data-help-id"] for p in popovers} == REGISTRY.ids() - {"credential.token"}
     for popover in popovers:
         entry = REGISTRY.get(popover["data-help-id"])
         assert popover.find("h2").get_text() == entry.name

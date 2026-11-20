@@ -12,7 +12,7 @@
 
 <section aria-labelledby="components-title">
   <h2 id="components-title">Component health</h2>
-  <p class="hint">A component stays Unknown until its first heartbeat arrives. Unknown is not healthy.</p>
+  <p class="hint">A component stays Unknown until its first heartbeat arrives. Unknown is not healthy. Start the gateway to see its components report.</p>
   <div class="table-wrap" tabindex="0" role="region" aria-labelledby="components-title">
     <table>
       <thead>
@@ -22,9 +22,9 @@
         {% for item in state.health %}
         <tr>
           <td>{{ item.component.name }}
-            <span class="sub">{% if item.component.live_in_phase > 6 %}Not part of the MVP phases (FR-20){% else %}Heartbeat starts in phase {{ item.component.live_in_phase }}{% endif %}</span></td>
+            <span class="sub">{% if item.component.live_in_phase > 6 %}Not part of the MVP phases (FR-20){% elif item.component.live_in_phase <= 2 %}Reported by the gateway every 5 s{% else %}Heartbeat starts in phase {{ item.component.live_in_phase }}{% endif %}</span></td>
           <td>{{ status_chip(item.status) }}</td>
-          <td class="num">{% if item.last_heartbeat_at %}<time datetime="{{ item.last_heartbeat_at.isoformat() }}">{{ item.last_heartbeat_at | ts }}</time>{% else %}never{% endif %}</td>
+          <td class="num">{% if item.last_heartbeat_at %}{% if item.status.value != "Healthy" %}No heartbeat since {% endif %}<time datetime="{{ item.last_heartbeat_at.isoformat() }}">{{ item.last_heartbeat_at | ts }}</time>{% else %}never{% endif %}</td>
         </tr>
         {% endfor %}
       </tbody>

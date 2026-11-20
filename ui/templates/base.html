@@ -28,6 +28,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}{% endblock %} · KeepAir{% if demo_mode %} (demo){% endif %}</title>
+  {% if auto_refresh is defined and auto_refresh %}<meta http-equiv="refresh" content="5">{% endif %}
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/app.js" defer></script>
 </head>

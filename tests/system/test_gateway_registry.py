@@ -105,7 +105,7 @@ def test_unregistered_is_a_separate_label_with_its_own_action(ui):
     assert not row.select(".reg--blocked, .reg--allowed")
     button = row.find("button")
     assert button.get_text(strip=True) == "Register model" and button.has_attr("disabled")
-    assert "phase 2" in row.find(id=button["aria-describedby"]).get_text()
+    assert "not built yet" in row.find(id=button["aria-describedby"]).get_text()
     assert not soup.select('tr[data-model="vendor-a/model-9"]')  # no registry row for unknown
     assert soup.select_one('[data-pending="D-03"]')
 
@@ -150,6 +150,21 @@ def test_block_without_a_valid_reason_changes_nothing(ui, engine, reason):
 def test_cross_site_form_post_is_refused(ui, headers):
     assert post_block(ui, "vendor", "vendor-a", headers=headers).status_code == 403
     assert not ui.soup("/gateway").select_one('tr[data-vendor="vendor-a"] .reg--blocked')
+
+
+@pytest.mark.req("TB-9 (CSRF)", "SEC-13")
+def test_form_posts_as_a_real_browser_sends_them(ui):
+    """Regression: a browser may send "Origin: null" on a same-origin form post.
+
+    The browser's own Sec-Fetch-Site header decides. Found by clicking through in Chromium.
+    """
+    browser_same = {"Origin": "null", "Sec-Fetch-Site": "same-origin"}
+    assert post_block(ui, "model", "vendor-a/model-2", headers=browser_same).status_code == 303
+    for site in ("cross-site", "same-site", "none"):
+        forged = {"Origin": "http://testserver", "Sec-Fetch-Site": site}  # header wins over Origin
+        assert post_block(ui, "vendor", "vendor-a", headers=forged).status_code == 403
+    assert post_block(ui, "vendor", "vendor-a", headers={"Origin": "null"}).status_code == 403
+    assert ui.client.get("/").headers["referrer-policy"] == "same-origin"
 
 
 @pytest.mark.req("SEC-27 (output encoding)")

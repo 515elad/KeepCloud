@@ -26,6 +26,7 @@ from keepair.web.formatting import format_money
 EXAMPLE_PROJECT = "Research Agent"
 EXAMPLE_MODEL = "vendor-b/model-1"
 EXAMPLE_BLOCK_VENDOR = "vendor-a"
+EXAMPLE_REASON = "VENDOR_BLOCKED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +141,50 @@ def _block_impact(conn: Connection, clock: Clock) -> Evaluated:
     return Evaluated({"subject": f"vendor {EXAMPLE_BLOCK_VENDOR}"}, ", ".join(affected))
 
 
+def _activity(conn: Connection, clock: Clock) -> views.Activity:
+    return views.load_activity(conn, _tenant(conn), clock.now())
+
+
+def _gateway_requests(conn: Connection, clock: Clock) -> Evaluated:
+    count = _activity(conn, clock).requests
+    return Evaluated({"decision_records_in_window": str(count)}, str(count))
+
+
+def _gateway_refused(conn: Connection, clock: Clock) -> Evaluated:
+    count = _activity(conn, clock).refused
+    return Evaluated({"denied_records_in_window": str(count)}, str(count))
+
+
+def _gateway_held(conn: Connection, clock: Clock) -> Evaluated:
+    count = _activity(conn, clock).held
+    return Evaluated({"held_records_in_window": str(count)}, str(count))
+
+
+def _denial_count(conn: Connection, clock: Clock) -> Evaluated:
+    summary = {r.code: r for r in _activity(conn, clock).reasons}.get(EXAMPLE_REASON)
+    return Evaluated({"reason": EXAMPLE_REASON}, str(summary.count if summary else 0))
+
+
+def _denial_trend(conn: Connection, clock: Clock) -> Evaluated:
+    summary = {r.code: r for r in _activity(conn, clock).reasons}.get(EXAMPLE_REASON)
+    peak = summary.peak if summary else 0
+    return Evaluated({"reason": EXAMPLE_REASON}, f"at most {peak} in one hour")
+
+
+def _credential_status(conn: Connection, clock: Clock) -> Evaluated:
+    agent = "research-agent"
+    row = next(r for r in views.load_credentials(conn, _tenant(conn)).rows if r.agent == agent)
+    lifetime_days = (row.expires_at - row.created_at).days
+    return Evaluated(
+        inputs={
+            "agent": row.agent,
+            "revoked_at": "none" if row.revoked_at is None else "set",
+            "expires_at": f"{lifetime_days} days after it was issued",
+        },
+        result=row.status,
+    )
+
+
 FORMULAS: dict[str, Callable[[Connection, Clock], Evaluated]] = {
     "health_status": _health_status,
     "coverage_state": _coverage_state,
@@ -149,4 +194,10 @@ FORMULAS: dict[str, Callable[[Connection, Clock], Evaluated]] = {
     "budget_effective_remaining": _budget_effective_remaining,
     "model_effective_status": _model_effective_status,
     "block_impact": _block_impact,
+    "gateway_requests": _gateway_requests,
+    "gateway_refused": _gateway_refused,
+    "gateway_held": _gateway_held,
+    "denial_count": _denial_count,
+    "denial_trend": _denial_trend,
+    "credential_status": _credential_status,
 }

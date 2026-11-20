@@ -28,6 +28,97 @@
 {% endif %}
 {% endmacro %}
 {% block content %}
+{% if activity %}
+<section aria-labelledby="activity-title">
+  <h2 id="activity-title">Gateway activity, last 24 hours</h2>
+  <p class="hint">{% if auto_refresh %}This page reloads every 5 seconds. <a href="/gateway">Stop reloading</a>{% else %}<a href="/gateway?auto=1">Reload this page every 5 seconds</a>{% endif %}</p>
+  <dl class="kpis">
+    <div data-kpi data-field-id="gateway.requests_24h"><dt>{{ help.name("gateway.requests_24h") }} {{ help.button("gateway.requests_24h") }}</dt><dd class="num">{{ "{:,}".format(activity.requests) }}</dd></div>
+    <div data-kpi data-field-id="gateway.refused_24h"><dt>{{ help.name("gateway.refused_24h") }} {{ help.button("gateway.refused_24h") }}</dt><dd class="num">{{ "{:,}".format(activity.refused) }}</dd></div>
+    <div data-kpi data-field-id="gateway.held_24h"><dt>{{ help.name("gateway.held_24h") }} {{ help.button("gateway.held_24h") }}</dt><dd class="num">{{ "{:,}".format(activity.held) }}</dd></div>
+    <div data-kpi data-field-id="gateway.last_request_at"><dt>{{ help.name("gateway.last_request_at") }} {{ help.button("gateway.last_request_at") }}</dt><dd class="num">{% if activity.last_request_at %}<time datetime="{{ activity.last_request_at.isoformat() }}">{{ activity.last_request_at | ts }}</time>{% else %}never{% endif %}</dd></div>
+  </dl>
+</section>
+
+<section aria-labelledby="denials-title">
+  <h2 id="denials-title">Denials and holds</h2>
+  {% if activity.feed %}
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Refusals by reason">
+    <table data-table="reasons">
+      <thead><tr>{{ help.th("denial.reason") }}{{ help.th("denial.count_24h") }}{{ help.th("denial.trend") }}</tr></thead>
+      <tbody>
+        {% for r in activity.reasons %}
+        <tr data-reason="{{ r.code }}">
+          <td>{{ r.reason }} <code class="reason-code">{{ r.code }}</code></td>
+          <td class="num amount">{{ "{:,}".format(r.count) }}</td>
+          <td><svg class="spark" viewBox="0 0 96 20" role="img" aria-label="{{ r.count }} in 24 hours, at most {{ r.peak }} in one hour"><polyline points="{{ r.points }}"/></svg><span class="sub">at most {{ r.peak }} in one hour</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="hint">Latest {{ activity.feed | length }} denied or held requests, newest first.</p>
+  <div class="table-wrap" tabindex="0" role="region" aria-labelledby="denials-title">
+    <table class="dense" data-table="denials">
+      <thead><tr>{{ help.th("denial.time") }}{{ help.th("denial.agent") }}{{ help.th("denial.model") }}{{ help.th("denial.reason") }}{{ help.th("denial.budget") }}{{ help.th("denial.request_id") }}</tr></thead>
+      <tbody>
+        {% for d in activity.feed %}
+        <tr data-denial="{{ d.code }}">
+          <td class="num"><time datetime="{{ d.occurred_at.isoformat() }}">{{ d.occurred_at | ts }}</time></td>
+          <td>{{ d.agent }}<span class="sub">{{ d.project }}</span></td>
+          <td><code>{{ d.requested_model }}</code></td>
+          <td><span class="outcome outcome--{{ d.outcome | lower }}"><span aria-hidden="true">{{ "⏸" if d.outcome == "HELD" else "⛔" }}</span> {{ "Held" if d.outcome == "HELD" else "Denied" }}</span> {{ d.reason }} <code class="reason-code">{{ d.code }}</code></td>
+          <td>{% if d.budget %}{{ d.budget }}{% else %}<span aria-hidden="true">–</span><span class="sr-only">No budget involved</span>{% endif %}</td>
+          <td><code>{{ d.request_id }}</code></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty-state" data-empty="denials">No denials in the last 24 hours. Last gateway request: {% if activity.last_request_at %}<time datetime="{{ activity.last_request_at.isoformat() }}">{{ activity.last_request_at | ts }}</time>{% else %}never. No traffic has reached the gateway, so this is not a sign that all is well{% endif %}.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if credentials %}
+<section aria-labelledby="credentials-title">
+  <h2 id="credentials-title">Gateway credentials</h2>
+  <p class="hint">Each agent calls the gateway with its own token. A token is shown once when it is created; only its SHA-256 hash is kept. Tokens stop working after 90 days. {{ pending("SD-02") }}</p>
+  <div class="table-wrap" tabindex="0" role="region" aria-labelledby="credentials-title">
+    <table class="dense" data-table="credentials">
+      <thead><tr>{{ help.th("credential.agent") }}{{ help.th("credential.label") }}{{ help.th("credential.status") }}{{ help.th("credential.created_at") }}{{ help.th("credential.expires_at") }}{{ help.th("credential.revoke") }}</tr></thead>
+      <tbody>
+        {% for c in credentials.rows %}
+        <tr data-credential="{{ c.id }}" data-status="{{ c.status }}">
+          <td>{{ c.agent }}<span class="sub">{{ c.project }}</span></td>
+          <td>{{ c.label }}</td>
+          <td><span class="cred cred--{{ c.status | lower }}"><span aria-hidden="true">{{ {"Active": "✓", "Expired": "⌛", "Revoked": "⛔"}[c.status] }}</span> {{ c.status }}</span></td>
+          <td class="num"><time datetime="{{ c.created_at.isoformat() }}">{{ c.created_at | ts }}</time></td>
+          <td class="num"><time datetime="{{ c.expires_at.isoformat() }}">{{ c.expires_at | ts }}</time></td>
+          <td>{% if c.status == "Active" %}<form method="post" action="/gateway/credentials/{{ c.id }}/revoke"><button type="submit" class="btn btn--small" aria-label="Revoke the {{ c.label }} credential of {{ c.agent }}">Revoke</button></form>{% else %}<span class="sub">Nothing to revoke</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <form method="post" action="/gateway/credentials" class="form form--inline" aria-labelledby="new-credential-title">
+    <h3 id="new-credential-title">Create a credential</h3>
+    <div class="field">
+      <div class="field__label"><label for="agent_id" data-field-id="credential.new_agent">{{ help.name("credential.new_agent") }}</label> {{ help.button("credential.new_agent") }}</div>
+      <select id="agent_id" name="agent_id" data-field-id="credential.new_agent" required>
+        {% for agent_id, agent, project in credentials.agents %}<option value="{{ agent_id }}">{{ agent }} ({{ project }})</option>{% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <div class="field__label"><label for="label" data-field-id="credential.label">{{ help.name("credential.label") }}</label> {{ help.button("credential.label") }}</div>
+      <input id="label" name="label" type="text" data-field-id="credential.label" required maxlength="60" autocomplete="off">
+    </div>
+    <p class="actions"><button type="submit" class="btn">Create credential</button></p>
+  </form>
+</section>
+{% endif %}
+
 {% if registry %}
 <section aria-labelledby="vendors-title">
   <h2 id="vendors-title">Vendors</h2>
@@ -90,7 +181,7 @@
           <td class="num amount">{{ u.seen_count }}</td>
           <td class="num"><time datetime="{{ u.first_seen_at.isoformat() }}">{{ u.first_seen_at | ts }}</time></td>
           <td class="num"><time datetime="{{ u.last_seen_at.isoformat() }}">{{ u.last_seen_at | ts }}</time></td>
-          <td><button type="button" class="btn" disabled aria-describedby="why-register-{{ loop.index }}">Register model</button><span class="sub" id="why-register-{{ loop.index }}">Registration arrives with the gateway in phase 2.</span></td>
+          <td><button type="button" class="btn" disabled aria-describedby="why-register-{{ loop.index }}">Register model</button><span class="sub" id="why-register-{{ loop.index }}">Registering a model from this screen is not built yet.</span></td>
         </tr>
         {% else %}
         <tr><td colspan="5" class="empty">No unregistered model has been requested.</td></tr>

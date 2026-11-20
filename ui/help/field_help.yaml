@@ -141,7 +141,7 @@ fields:
     meaning: The part of the organization this budget belongs to. Budgets follow the hierarchy of organization, department, team and project.
     unit: Text. The scope name, with its level underneath.
     source: seed script
-    source_detail: Demo hierarchy from the seed script. Creating budgets in the UI is not part of phase 1.
+    source_detail: Demo hierarchy from the seed script. Budgets cannot be created in the UI yet.
     worked_example:
       description: A project budget in the demo data.
       result: Research Agent (Project)
@@ -230,7 +230,7 @@ fields:
     meaning: Money already spent against this budget in the period, including spend of its Subdivision sub-budgets.
     unit: Money in the budget's currency. Stored as micro-units, shown with two decimals.
     source: gateway
-    source_detail: Written by the gateway when a request is settled (from phase 2). In phase 1 the values are seeded demo data.
+    source_detail: Written by the gateway when a request is settled, on top of the seeded opening value.
     worked_example:
       description: The Research Agent project budget.
       result: 14,000.00 USD
@@ -243,7 +243,7 @@ fields:
     meaning: Money held for requests that are in flight and not yet settled. It is not spent, and it is released if the request costs less.
     unit: Money in the budget's currency. Stored as micro-units, shown with two decimals.
     source: gateway
-    source_detail: Written by the gateway when a request is reserved (from phase 2). In phase 1 the values are seeded demo data.
+    source_detail: Written by the gateway when a request is reserved, and released when it settles. The seeded opening value stands for long-running requests.
     worked_example:
       description: The Research Agent project budget.
       result: 1,750.00 USD
@@ -491,7 +491,7 @@ fields:
     meaning: A model name that was requested but that nobody has registered. Requests for it are denied.
     unit: Text, as normalized (lower case, trimmed).
     source: gateway
-    source_detail: Recorded by the gateway when it denies an unknown model (from phase 2). The demo row comes from the seed script.
+    source_detail: Recorded by the gateway when it denies an unknown model. The first demo row comes from the seed script.
     worked_example:
       description: The unregistered model in the demo data.
       result: vendor-a/model-9
@@ -504,7 +504,7 @@ fields:
     meaning: How many requests asked for this name.
     unit: Whole number.
     source: gateway
-    source_detail: Counted by the gateway (from phase 2). The demo value comes from the seed script.
+    source_detail: Counted by the gateway. The opening demo value comes from the seed script.
     worked_example:
       description: vendor-a/model-9 in the demo data.
       result: "14"
@@ -517,7 +517,7 @@ fields:
     meaning: When this name was first requested.
     unit: Date and time, ISO 8601, stored in UTC. Shown as YYYY-MM-DD HH:MM:SS UTC.
     source: gateway
-    source_detail: Recorded by the gateway (from phase 2). The demo value comes from the seed script.
+    source_detail: Recorded by the gateway. The opening demo value comes from the seed script.
     worked_example:
       description: vendor-a/model-9 in the demo data.
       result: "2026-01-12 09:00:00 UTC"
@@ -530,7 +530,7 @@ fields:
     meaning: When this name was most recently requested.
     unit: Date and time, ISO 8601, stored in UTC. Shown as YYYY-MM-DD HH:MM:SS UTC.
     source: gateway
-    source_detail: Recorded by the gateway (from phase 2). The demo value comes from the seed script.
+    source_detail: Recorded by the gateway. The opening demo value comes from the seed script.
     worked_example:
       description: vendor-a/model-9 in the demo data.
       result: "2026-01-15 08:00:00 UTC"
@@ -540,15 +540,15 @@ fields:
 
   unregistered.register:
     name: Action
-    meaning: Registers the name as a model so that it can be allowed or blocked. Not available until the gateway exists in phase 2.
+    meaning: Registers the name as a model so that it can be allowed or blocked. This action is not built yet.
     unit: Button.
     source: user input
     source_detail: Administrator action in this screen.
     worked_example:
       description: The action for vendor-a/model-9 in the demo data.
-      result: Register model (disabled until phase 2)
+      result: Register model (disabled, not built yet)
     allowed_range: One registration per name.
-    validation: Disabled in phase 1.
+    validation: Disabled. Models are added through the seed data for now.
     prd_ref: UX-4 (Unregistered offers "Register model")
 
   block.impact:
@@ -582,3 +582,297 @@ fields:
     allowed_range: 10 to 300 characters after trimming.
     validation: Required. Shorter or longer text is refused and nothing is changed.
     prd_ref: FR-18 (every registry change is recorded with a reason), UX-3
+
+  gateway.requests_24h:
+    name: Requests
+    meaning: How many requests reached the gateway with a valid credential in the last 24 hours.
+    unit: Whole number.
+    source: calculated
+    source_detail: Counted from the gateway's decision records.
+    formula: |
+      requests = number of decision records with occurred_at later than now - 24 hours
+    formula_fn: gateway_requests
+    worked_example:
+      description: The seeded demo data has no gateway traffic yet. After the scripted demo traffic it shows 500.
+      inputs:
+        decision_records_in_window: "0"
+      result: "0"
+    allowed_range: 0 or more.
+    validation: Calculated only. Requests with a missing or wrong token are counted in metrics, not here.
+    prd_ref: UX-5 (denials feed), FR-05
+
+  gateway.refused_24h:
+    name: Denied
+    meaning: How many of those requests the gateway refused.
+    unit: Whole number.
+    source: calculated
+    source_detail: Counted from the gateway's decision records.
+    formula: |
+      denied = number of decision records in the last 24 hours with outcome DENIED
+    formula_fn: gateway_refused
+    worked_example:
+      description: The seeded demo data has no gateway traffic yet.
+      inputs:
+        denied_records_in_window: "0"
+      result: "0"
+    allowed_range: 0 up to Requests.
+    validation: Calculated only.
+    prd_ref: UX-5, SEC-11 (denial contract)
+
+  gateway.held_24h:
+    name: Held
+    meaning: How many requests are waiting for an approver because their project's budget has the Approval policy. Nothing is sent to a vendor while a request is held.
+    unit: Whole number.
+    source: calculated
+    source_detail: Counted from the gateway's decision records.
+    formula: |
+      held = number of decision records in the last 24 hours with outcome HELD
+    formula_fn: gateway_held
+    worked_example:
+      description: The seeded demo data has no gateway traffic yet.
+      inputs:
+        held_records_in_window: "0"
+      result: "0"
+    allowed_range: 0 up to Requests. At most 20 open holds per credential.
+    validation: Calculated only.
+    prd_ref: FR-11 (HELD queue), FR-05 (approval policy), D-07
+
+  gateway.last_request_at:
+    name: Last request
+    meaning: When the gateway last decided a request. It shows that traffic is arriving, so that zero denials is not mistaken for a gateway nobody uses.
+    unit: Date and time, ISO 8601, stored in UTC. Shown as YYYY-MM-DD HH:MM:SS UTC.
+    source: gateway
+    source_detail: The newest decision record of any outcome.
+    worked_example:
+      description: The seeded demo data has no gateway traffic yet.
+      result: never
+    allowed_range: Any past time, or never.
+    validation: Must carry a timezone. Stored as UTC.
+    prd_ref: UX-10 (no denials state shows the last gateway request)
+
+  denial.reason:
+    name: Reason
+    meaning: Why the request was refused or held, in plain words, with the stable reason code next to it. Agents receive only the code.
+    unit: Text, then the code in upper case.
+    source: gateway
+    source_detail: Set by the gateway step that refused the request.
+    worked_example:
+      description: A request for a model of blocked vendor-b.
+      result: The vendor is blocked VENDOR_BLOCKED
+    allowed_range: Only codes registered in the gateway.
+    validation: The plain-language text is looked up from the code. It is never taken from the request.
+    prd_ref: UX-5 (reason in plain language, code in monospace), SEC-11, UX-D3
+
+  denial.count_24h:
+    name: Requests
+    meaning: How many requests were refused or held for this reason in the last 24 hours.
+    unit: Whole number.
+    source: calculated
+    source_detail: Counted from the gateway's decision records.
+    formula: |
+      requests(reason) = number of denied or held decision records in the last 24 hours with that reason code
+    formula_fn: denial_count
+    worked_example:
+      description: The seeded demo data has no gateway traffic yet, so there is no refusal for VENDOR_BLOCKED.
+      inputs:
+        reason: VENDOR_BLOCKED
+      result: "0"
+    allowed_range: 1 or more for a listed reason.
+    validation: Calculated only. A reason with no refusals is not listed.
+    prd_ref: UX-5 (grouped by reason)
+
+  denial.trend:
+    name: Last 24 hours
+    meaning: How the refusals for this reason are spread over the last 24 hours, one point per hour, oldest on the left.
+    unit: Requests per hour. The line is scaled to the busiest hour, which is given in words next to it.
+    source: calculated
+    source_detail: Counted from the gateway's decision records.
+    formula: |
+      point(h) = number of refusals with this reason whose age is h hours, for h = 23 down to 0
+    formula_fn: denial_trend
+    worked_example:
+      description: The seeded demo data has no gateway traffic yet, so every hour is 0.
+      inputs:
+        reason: VENDOR_BLOCKED
+      result: at most 0 in one hour
+    allowed_range: 0 or more per hour.
+    validation: Calculated only.
+    prd_ref: UX-5 (sparkline per reason), UX-14 (every chart has a text summary)
+
+  denial.time:
+    name: Time
+    meaning: When the gateway refused or held the request.
+    unit: Date and time, ISO 8601, stored in UTC. Shown as YYYY-MM-DD HH:MM:SS UTC.
+    source: gateway
+    source_detail: Set from the gateway's clock when the decision is recorded.
+    worked_example:
+      description: A refusal recorded at the demo clock time would show this value.
+      result: "2026-01-15 09:00:00 UTC"
+    allowed_range: Any past time.
+    validation: Must carry a timezone. Stored as UTC.
+    prd_ref: UX-5
+
+  denial.agent:
+    name: Agent
+    meaning: The agent whose credential made the request, with its project underneath. It comes from the credential, never from anything the request says about itself.
+    unit: Text.
+    source: gateway
+    source_detail: Derived from the gateway credential.
+    worked_example:
+      description: The agent of the Research Agent project in the demo data.
+      result: research-agent (Research Agent)
+    allowed_range: Agents registered in KeepAir.
+    validation: Client headers such as X-Project are ignored.
+    prd_ref: UX-5, FR-05 (principal from the credential), FR-06
+
+  denial.model:
+    name: Requested model
+    meaning: The model name exactly as the request asked for it. It can be an alias or a name nobody registered.
+    unit: Text, at most 200 characters.
+    source: gateway
+    source_detail: Copied from the request body.
+    worked_example:
+      description: A request that used an alias of a vendor-b model.
+      result: vb-large
+    allowed_range: Any text.
+    validation: Untrusted input. Shown escaped and never used for policy before it is resolved in the registry.
+    prd_ref: UX-5, SEC-27 (output encoding), FR-18
+
+  denial.budget:
+    name: Budget
+    meaning: The budget that stopped or holds the request. Empty when the refusal had nothing to do with a budget.
+    unit: Text. The budget's scope name.
+    source: gateway
+    source_detail: Recorded by the ledger when it refuses or holds a reservation.
+    worked_example:
+      description: A request refused because the Summaries EU project budget had no room.
+      result: Summaries EU
+    allowed_range: A budget on the project's limit path, or empty.
+    validation: Shown in this screen only. The agent's error response never names a budget or an amount.
+    prd_ref: UX-5, SEC-11 (no budget amounts or internal identifiers in the response)
+
+  denial.request_id:
+    name: Request ID
+    meaning: The identifier the gateway gave the request. The agent received the same ID, so a report from a developer can be matched to this row.
+    unit: UUID version 7.
+    source: gateway
+    source_detail: Generated by the gateway for every request and returned in the X-KeepAir-Request-Id header.
+    worked_example:
+      description: The shape of a request ID.
+      result: 019bc0f7-7480-7xxx-xxxx-xxxxxxxxxxxx
+    allowed_range: One per request.
+    validation: Generated by the gateway. It cannot be supplied by the client.
+    prd_ref: UX-5, SEC-11 (request ID in every denial)
+
+  credential.agent:
+    name: Agent
+    meaning: The agent this credential belongs to, with its project underneath. Spend made with the credential is charged to that project's budget.
+    unit: Text.
+    source: seed script
+    source_detail: Agents come from the demo seed. Each project has one.
+    worked_example:
+      description: The agent of the Research Agent project in the demo data.
+      result: research-agent (Research Agent)
+    allowed_range: Agents of this tenant.
+    validation: Must exist (foreign key).
+    prd_ref: FR-05 (authenticate), FR-17 (each agent has its own credential)
+
+  credential.label:
+    name: Label
+    meaning: A short name that tells credentials of the same agent apart.
+    unit: Text, 1 to 60 characters.
+    source: user input
+    source_detail: Typed when the credential is created. Demo credentials are labelled demo.
+    worked_example:
+      description: The label of the seeded demo credentials.
+      result: demo
+    allowed_range: 1 to 60 characters.
+    validation: Required. Shown escaped.
+    prd_ref: FR-05 (credentials), SEC-27
+
+  credential.status:
+    name: Status
+    meaning: Whether the gateway accepts this credential right now.
+    unit: Text. Active, Expired or Revoked.
+    source: calculated
+    source_detail: Calculated from the revocation time and the expiry time, judged by the database clock.
+    formula: |
+      status = Revoked  when revoked_at is set
+      status = Expired  when expires_at <= now
+      status = Active   otherwise
+    formula_fn: credential_status
+    worked_example:
+      description: The demo credential of the Research Agent project. It was issued when the demo data was loaded and is valid for 90 days.
+      inputs:
+        agent: research-agent
+        revoked_at: none
+        expires_at: 90 days after it was issued
+      result: Active
+    allowed_range: Exactly one of the three.
+    validation: Calculated only. A revoked or expired credential is refused at the next request.
+    prd_ref: SEC-12 (90-day maximum, revocation), SD-02 (pending decision)
+
+  credential.created_at:
+    name: Created
+    meaning: When the credential was created.
+    unit: Date and time, ISO 8601, stored in UTC. Shown as YYYY-MM-DD HH:MM:SS UTC.
+    source: system
+    source_detail: Set from the database clock when the credential is created.
+    worked_example:
+      description: A credential created at the demo clock time would show this value.
+      result: "2026-01-15 09:00:00 UTC"
+    allowed_range: Any past time.
+    validation: Set by the database. It cannot be entered.
+    prd_ref: SEC-12
+
+  credential.expires_at:
+    name: Expires
+    meaning: When the credential stops working. It is 90 days after creation.
+    unit: Date and time, ISO 8601, stored in UTC. Shown as YYYY-MM-DD HH:MM:SS UTC.
+    source: system
+    source_detail: Set from the database clock when the credential is created.
+    worked_example:
+      description: A credential created at the demo clock time would expire at this value.
+      result: "2026-04-15 09:00:00 UTC"
+    allowed_range: At most 90 days after Created.
+    validation: The database refuses a lifetime longer than 90 days.
+    prd_ref: SEC-12 (90-day maximum), SD-02 (pending decision)
+
+  credential.revoke:
+    name: Revoke
+    meaning: Stops the credential at once. The agent's next request is refused, and this cannot be undone.
+    unit: Button.
+    source: user input
+    source_detail: Administrator action in this screen.
+    worked_example:
+      description: The action for an active demo credential.
+      result: Revoke
+    allowed_range: Active credentials only.
+    validation: One step. Revoking only narrows access.
+    prd_ref: SEC-12 (revocation), FR-05 (rotation creates a new token and revokes the old one)
+
+  credential.new_agent:
+    name: Agent
+    meaning: The agent the new credential is for.
+    unit: Choice from the list of agents.
+    source: user input
+    source_detail: Chosen in the form.
+    worked_example:
+      description: Creating a credential for the Research Agent project's agent.
+      result: research-agent (Research Agent)
+    allowed_range: Agents of this tenant.
+    validation: Required. An unknown agent is refused.
+    prd_ref: FR-05 (credentials), FR-17
+
+  credential.token:
+    name: Token
+    meaning: The secret the agent sends to the gateway. It is shown once, here, and cannot be shown again.
+    unit: Text. kair_, then 43 characters, then a 6-character checksum.
+    source: system
+    source_detail: Generated from 256 random bits when the credential is created. Only its SHA-256 hash is stored.
+    worked_example:
+      description: The shape of a token. This is not a working token.
+      result: kair_<43 characters>_<6 characters>
+    allowed_range: 256 bits of randomness.
+    validation: A token with a wrong checksum is refused before any database lookup.
+    prd_ref: SEC-12 (256-bit, hashed), SEC-22 (prefix and checksum), FR-05

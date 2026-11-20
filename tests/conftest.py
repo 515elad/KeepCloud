@@ -20,7 +20,7 @@ from alembic.config import Config
 from sqlalchemy import Engine, create_engine
 
 from keepair.config import REPO_ROOT, Settings
-from keepair.demo.seed import demo_clock, seed
+from keepair.demo.seed import demo_clock, issue_demo_credentials, seed
 
 LEVELS = ("unit", "integration", "system")
 
@@ -77,6 +77,7 @@ def engine(migrated_engine: Engine) -> Engine:
     """Database reset to the seeded demo data before each test."""
     with migrated_engine.begin() as conn:
         seed(conn, demo_clock())
+        issue_demo_credentials(conn)
     return migrated_engine
 
 

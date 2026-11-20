@@ -38,20 +38,13 @@ PAGES: tuple[Page, ...] = (
         "budgets",
         "Budgets",
         "The budget hierarchy, each budget's cap, and what is left after parent limits.",
-        (
-            Section("Live committed and reserved amounts from the gateway", 2, ("FR-05",)),
-            Section("Owner assignment", 5, ("FR-17",)),
-        ),
+        (Section("Owner assignment", 5, ("FR-17",)),),
     ),
     Page(
         "gateway",
         "Gateway",
         "Which vendors and models are allowed, and what the gateway denied and why.",
-        (
-            Section("Projects and gateway credentials", 2, ("FR-05", "SEC-12")),
-            Section("Denials feed", 2, ("FR-05", "UX-5")),
-            Section("Fail-open report", 3, ("FR-05", "FR-12", "UX-7")),
-        ),
+        (Section("Fail-open report", 3, ("FR-05", "FR-12", "UX-7")),),
     ),
     Page(
         "approvals",
