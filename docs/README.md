@@ -8,12 +8,17 @@ Needs Docker. No account, API key or internet service is used.
 docker compose up --build
 ```
 
-Open <http://localhost:8000>, then follow the demo script for the current phase.
+Open <http://localhost:8000>, then follow the demo script for the current phase. The gateway listens on <http://localhost:8080>. To send the scripted demo traffic:
+
+```bash
+docker compose run --rm demo-traffic
+```
 
 | Phase | Demo script | Lifecycle record |
 |---|---|---|
 | 0 Foundation | [demo/phase-0.md](demo/phase-0.md) | [lifecycle/phase-0.md](lifecycle/phase-0.md) |
 | 1 Budgets and policy visibility | [demo/phase-1.md](demo/phase-1.md) | [lifecycle/phase-1.md](lifecycle/phase-1.md) |
+| 2 Gateway, ledger and denials | [demo/phase-2.md](demo/phase-2.md) | [lifecycle/phase-2.md](lifecycle/phase-2.md) |
 
 ## Map
 

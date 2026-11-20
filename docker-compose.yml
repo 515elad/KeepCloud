@@ -16,17 +16,62 @@ services:
       timeout: 2s
       retries: 30
 
+  # The UI. Loads the demo data at start.
   app:
     build: .
-    environment:
+    environment: &app-env
       KEEPAIR_ENV: demo
       KEEPAIR_DEMO_MODE: "true"
       KEEPAIR_DATABASE_URL: postgresql+psycopg://keepair:${KEEPAIR_DB_PASSWORD:-keepair}@db:5432/keepair
+      KEEPAIR_MOCK_PROVIDER_URL: http://mock-provider:8090
+      KEEPAIR_GATEWAY_URL: http://gateway:8080
     depends_on:
       db:
         condition: service_healthy
     ports:
       - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  # The gateway: a separate listener with no admin routes (SEC-14).
+  gateway:
+    build: .
+    command: ["uvicorn", "keepair.gateway.main:app", "--host", "0.0.0.0", "--port", "8080"]
+    environment: *app-env
+    depends_on:
+      app:
+        condition: service_healthy
+      mock-provider:
+        condition: service_started
+    ports:
+      - "127.0.0.1:8080:8080"
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  # A stand-in model vendor. It calls nothing and needs no key.
+  mock-provider:
+    build: .
+    command: ["uvicorn", "keepair.mockprovider.main:app", "--host", "0.0.0.0", "--port", "8090"]
+    environment: *app-env
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  # Sends the scripted demo traffic:  docker compose run --rm demo-traffic
+  demo-traffic:
+    build: .
+    command: ["python", "-m", "keepair.demo.traffic"]
+    environment: *app-env
+    depends_on:
+      - gateway
+    profiles: ["demo"]
     read_only: true
     tmpfs:
       - /tmp

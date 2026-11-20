@@ -1,5 +1,6 @@
 .venv
 .git
-tests
 docs
+tests/*
+!tests/fixtures
 **/__pycache__

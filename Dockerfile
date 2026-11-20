@@ -11,6 +11,7 @@ COPY pyproject.toml alembic.ini ./
 COPY src ./src
 COPY migrations ./migrations
 COPY ui ./ui
+COPY tests/fixtures/providers ./tests/fixtures/providers
 RUN pip install --no-cache-dir --no-deps -e .
 
 # Run as a non-root user (SEC-47).

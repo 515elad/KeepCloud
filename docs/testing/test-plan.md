@@ -60,6 +60,26 @@ Phase 1 coverage:
 
 Property tests use hypothesis. The budget property test builds random budget trees and random sequences of reserve and settle, and checks that no limiting budget ever goes below zero.
 
+Phase 2 coverage (the full bypass table is in `docs/lifecycle/phase-2.md`):
+
+| Requirement | Tests |
+|---|---|
+| FR-05 request path, attribution | `tests/integration/test_gateway_path.py` |
+| FR-05 concurrency, settle once, expiry, no partial state | `tests/integration/test_ledger.py` |
+| SEC-01 no dispatch without a reservation; bypass suite | `tests/integration/test_gateway_bypass.py` |
+| SEC-04 strict parsing, SEC-11 denial contract, SEC-12/22 tokens, estimator bound | `tests/unit/test_gateway_units.py` (includes property tests and parser fuzzing) |
+| SEC-34 / hard rule 8: no token, key or prompt in logs or any table | `test_logs_contain_no_prompt_or_key_material` |
+| FR-21 heartbeats, demo traffic determinism, latency evidence | `tests/integration/test_gateway_operations.py` |
+| UX-5 denials feed, credentials, live health strip | `tests/system/test_gateway_activity.py` |
+
+Provider calls are mocked with respx. The mocked answer uses the same fixture template and the same usage rule as the mock provider server, so tests and the demo stack behave alike. Fixtures are in `tests/fixtures/providers/`.
+
+The concurrency test uses 200 threads against a real PostgreSQL 16 container. Fault injection replaces one function with one that raises (database error, provider timeout, stale snapshot).
+
+## Browser checks
+
+HTTP-level tests do not send everything a browser sends. After a phase 1 defect that only a real browser showed (see `docs/lifecycle/phase-2.md`), every form is also clicked through in Chromium before a phase is closed: block, create credential, revoke. This is manual for now; an automated browser test is a candidate for the next phase.
+
 ## How to run
 
 ```bash
