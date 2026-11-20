@@ -18,6 +18,7 @@ The demo scripts name the underlying `docker compose` commands step by step; `./
 | 1 Budgets and policy visibility | [demo/phase-1.md](demo/phase-1.md) | [lifecycle/phase-1.md](lifecycle/phase-1.md) |
 | 2 Gateway, ledger and denials | [demo/phase-2.md](demo/phase-2.md) | [lifecycle/phase-2.md](lifecycle/phase-2.md) |
 | 3 Fail-open spool and visibility of failures | [demo/phase-3.md](demo/phase-3.md) | [lifecycle/phase-3.md](lifecycle/phase-3.md) |
+| 4 Spend data, allocation and reconciliation | [demo/phase-4.md](demo/phase-4.md) | [lifecycle/phase-4.md](lifecycle/phase-4.md) |
 
 ## Map
 
@@ -30,6 +31,7 @@ The demo scripts name the underlying `docker compose` commands step by step; `./
 | `compliance/` | [ISO/IEC 25010](compliance/iso25010.md), [ISO/IEC 27001 Annex A](compliance/iso27001-annex-a.md). Alignment only; no certification is claimed. |
 | `lifecycle/` | Plan, entry and exit criteria and review record per phase |
 | `demo/` | Click-through demo scripts |
+| `../demo/billing/` | Generated demo billing files to upload on the Spend page |
 
 ## Develop
 

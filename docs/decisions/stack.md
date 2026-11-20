@@ -15,3 +15,5 @@ The UI is server-rendered HTML with one small stylesheet and one small script, a
 | `detect-secrets` as the secret scanner | Installs from the pinned lockfile, runs offline and identically on a laptop and in CI. |
 | `uv` for lockfiles with hashes | Reproducible installs (SEC-43). |
 | Native HTML `popover` for the "i" help | Works with a click even if the script fails to load; the script only adds focus-open and placement. |
+| `python-multipart` (phase 4) | Needed to read a file upload from an HTML form. It is the parser the web framework itself expects. |
+| `cryptography` (phase 3) | AES-256-GCM for the fail-open spool. A maintained, widely reviewed library; no cipher code of our own. |

@@ -112,7 +112,7 @@ KeepAir is running.
 
   UI        $UI_URL            (start here)
   Gateway   $GATEWAY_URL/v1/chat/completions
-  Demo script: docs/demo/phase-3.md
+  Demo script: docs/demo/phase-4.md
 
   ./run.sh traffic   send the demo traffic again
   ./run.sh reset     reload the original demo data

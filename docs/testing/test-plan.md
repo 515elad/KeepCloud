@@ -86,9 +86,19 @@ Phase 3 coverage:
 
 Fault injection in phase 3: a switch that makes ledger writes fail, an engine that points at a closed port (PostgreSQL gone), a disk that refuses to flush, a process that dies after dispatch, and a spool file with changed or foreign lines.
 
+Phase 4 coverage:
+
+| Requirement | Tests |
+|---|---|
+| FR-07 finalization states, FR-03 allocation, FR-06 join confidence, SEC-28 file parser | `tests/unit/test_billing_units.py` (property tests for exact splits and full accounting; fuzz tests for the parser) |
+| FR-01 idempotent ingestion and revisions, FR-19 uncontrolled spend | `tests/integration/test_billing_ingest.py` |
+| Spend and Reconciliation pages, upload, quarantine, manual assignment, coverage badge | `tests/system/test_spend_pages.py` |
+
+Billing fixtures are the generated demo files in `demo/billing/`. `test_committed_demo_billing_files_are_what_the_generator_writes` keeps the committed copies equal to the generator's output.
+
 ## Browser checks
 
-HTTP-level tests do not send everything a browser sends. After a phase 1 defect that only a real browser showed (see `docs/lifecycle/phase-2.md`), every form is also clicked through in Chromium before a phase is closed: block, create credential, revoke, the demo console buttons and Acknowledge. This is manual for now; an automated browser test is a candidate for the next phase.
+HTTP-level tests do not send everything a browser sends. After a phase 1 defect that only a real browser showed (see `docs/lifecycle/phase-2.md`), every form is also clicked through in Chromium before a phase is closed: block, create credential, revoke, the demo console buttons, Acknowledge, the billing file upload and the manual assignment. This is manual for now; an automated browser test is a candidate for the next phase.
 
 ## How to run
 

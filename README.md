@@ -2,7 +2,7 @@
 
 KeepCloud MVP (product name: KeepAir): visibility and enforceable budgets for AI spend.
 
-**Status:** phase 3 of 6. The gateway reserves budget before every request and refuses blocked vendors, blocked or unknown models and exhausted hard limits, against a mock provider. When the ledger is down, monitor and soft budgets continue through an encrypted spool that is replayed afterwards; hard limits and blocks refuse. The UI shows budgets, the registry, denials, live health, and a fail-open banner and report.
+**Status:** phase 4 of 6. The gateway reserves budget before every request and refuses blocked vendors, blocked or unknown models and exhausted hard limits, against a mock provider; monitor and soft budgets continue through an encrypted spool when the ledger is down. Billing files can be loaded and are allocated to projects; estimates, provider-reported and invoiced figures are shown side by side and never mixed; usage the gateway did not see is flagged.
 
 ## Run it
 
