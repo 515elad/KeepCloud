@@ -114,11 +114,7 @@ def test_walk_fails_for_a_field_without_help():
 
 def test_popover_shows_every_required_part(ui_traffic):
     ui = ui_traffic
-    popovers = [
-        p
-        for path in walk_paths(ui)[:9] + walk_paths(ui)[-2:]
-        for p in ui.soup(path).select(".help[popover]")
-    ]
+    popovers = [p for path in walk_paths(ui) for p in ui.soup(path).select(".help[popover]")]
     assert {p["data-help-id"] for p in popovers} == REGISTRY.ids() - POST_ONLY
     for popover in popovers:
         entry = REGISTRY.get(popover["data-help-id"])

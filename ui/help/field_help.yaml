@@ -1137,3 +1137,522 @@ fields:
     allowed_range: Only codes registered in the gateway.
     validation: The words are looked up from the code.
     prd_ref: SEC-11 (stable reason codes), SEC-06, UX-5
+
+  spend.period:
+    name: Billing period
+    meaning: The calendar month the figures on this page belong to.
+    unit: Year and month, ISO 8601 (YYYY-MM). Months start and end at midnight UTC.
+    source: system
+    source_detail: Chosen from the months that have gateway usage or billing records. By default the newest month with billing data.
+    worked_example:
+      description: The month covered by the demo data.
+      result: 2026-01
+    allowed_range: A month that has data.
+    validation: Any other value falls back to the default month.
+    prd_ref: FR-07 (reconcile per billing period), UX-8 (timezone labelled)
+
+  cost.estimated:
+    name: Estimated
+    meaning: What the gateway calculated for the requests it handled, from its own price list. It is an estimate, not a charge.
+    unit: USD, the price list's currency. Stored as micro-units, shown with two decimals.
+    source: calculated
+    source_detail: Summed from the gateway's usage records in the period.
+    formula: |
+      estimated = sum of price_micros over gateway usage records
+                  with occurred_at inside the billing period
+    formula_fn: cost_estimated
+    worked_example:
+      description: The demo data for January 2026.
+      inputs:
+        period: 2026-01
+        records_from: gateway usage records
+      result: 182,373.32 USD
+    allowed_range: 0 or more.
+    validation: Always carries the state Estimated. It can never be shown as Provider-reported or Invoiced.
+    prd_ref: FR-07 (finalization state), FR-06 (separate estimated from invoiced), UX-8
+
+  cost.provider_reported:
+    name: Provider-reported
+    meaning: What the provider's usage export says was used. It is the provider's figure, not yet an invoice.
+    unit: USD. Stored as micro-units, shown with two decimals.
+    source: calculated
+    source_detail: Summed from the current revision of each record in the loaded usage export.
+    formula: |
+      provider_reported = sum of billed cost over current billing records
+                          with state PROVIDER_REPORTED in the billing period
+    formula_fn: cost_provider_reported
+    worked_example:
+      description: The demo data after loading demo/billing/vendor-a-usage-2026-01.csv.
+      inputs:
+        period: 2026-01
+        records_from: vendor-a usage export
+      result: 182,423.21 USD
+    allowed_range: 0 or more. "No data" until a usage export is loaded.
+    validation: Only the usage export source may supply this state. Superseded revisions are not counted.
+    prd_ref: FR-07 (finalization state), FR-01 (idempotent ingestion), UX-8
+
+  cost.invoiced:
+    name: Invoiced
+    meaning: What an invoice says is owed. This is the final figure for the records it covers.
+    unit: USD. Stored as micro-units, shown with two decimals.
+    source: calculated
+    source_detail: Summed from the current revision of each record in the loaded invoice file.
+    formula: |
+      invoiced = sum of billed cost over current billing records
+                 with state INVOICED in the billing period
+    formula_fn: cost_invoiced
+    worked_example:
+      description: The demo data after loading demo/billing/vendor-a-invoice-2026-01.csv, which covers 1 to 7 January.
+      inputs:
+        period: 2026-01
+        records_from: vendor-a invoice
+      result: 92,457.80 USD
+    allowed_range: 0 or more. "No data" until an invoice file is loaded.
+    validation: Only the invoice source may supply this state. An estimate can never appear here.
+    prd_ref: FR-07 (never present estimates as finalized invoices), D-05 (pending decision), UX-8
+
+  cost.model_chart:
+    name: Cost by model
+    meaning: Daily cost of one model, with a bar per finalization state. All model charts share one scale, so their heights can be compared.
+    unit: USD per day (UTC). Bar height is the day's amount divided by the scale's top.
+    source: calculated
+    source_detail: Gateway usage records and current billing records, grouped by model and day.
+    formula: |
+      bar_height(model, day, state) = amount(model, day, state) / scale_top
+      scale_top = the largest daily amount of any model and state in the period
+    formula_fn: cost_model_chart
+    worked_example:
+      description: The chart of vendor-a/model-1 in the demo data, after the usage export and the invoice are loaded.
+      inputs:
+        model: vendor-a/model-1
+        scale_top: 9,803.49 USD
+      result: 2026-01-01 to 2026-01-14. Estimated 117,193.46 USD, Provider-reported 117,223.51 USD, Invoiced 57,240.61 USD.
+    allowed_range: 0 or more per day.
+    validation: The three states are drawn side by side and never stacked or added. The text under the chart and its table give the exact figures.
+    prd_ref: UX-8 (small multiples for cost by model, hatched estimates), UX-14 (text summary and table view)
+
+  cost.day:
+    name: Day
+    meaning: The day the usage happened, in UTC.
+    unit: Date, ISO 8601 (YYYY-MM-DD), UTC.
+    source: system
+    source_detail: From the gateway's record time, or the charge period of the billing record.
+    worked_example:
+      description: The first day in the demo data.
+      result: "2026-01-01"
+    allowed_range: A day inside the billing period.
+    validation: Billing records must carry a timezone; they are converted to UTC.
+    prd_ref: UX-8 (timezone shown on every axis), ISO 8601
+
+  alloc.project:
+    name: Project
+    meaning: The project the cost belongs to, with its team underneath.
+    unit: Text.
+    source: seed script
+    source_detail: Projects of the demo organization.
+    worked_example:
+      description: A project that receives both direct cost and a share of shared cost.
+      result: Build Assistant (Platform)
+    allowed_range: Projects of this tenant.
+    validation: A record is tied to a project only by its tags, by a rule, or by hand. Never by guessing.
+    prd_ref: FR-03 (cost allocation), FR-06 (attribution)
+
+  alloc.direct:
+    name: Direct
+    meaning: Cost whose billing record names both the team and the project in its tags.
+    unit: USD, two decimals.
+    source: calculated
+    source_detail: Summed from the current allocation facts with confidence DIRECT.
+    formula: |
+      direct = sum of allocated amounts with confidence DIRECT for the project
+    formula_fn: alloc_direct
+    worked_example:
+      description: Build Assistant in the demo data, provider-reported records.
+      inputs:
+        project: Build Assistant
+        state: Provider-reported
+      result: 21,915.33 USD
+    allowed_range: 0 or more.
+    validation: Join confidence is 90 to 100 for a direct match.
+    prd_ref: FR-03 (direct attribution), FR-06 (exact match)
+
+  alloc.inferred:
+    name: Inferred
+    meaning: Cost assigned by an allocation rule that splits shared cost, or by a match on the project name alone. Amounts matched on the name alone are marked "to review".
+    unit: USD, two decimals.
+    source: calculated
+    source_detail: Summed from the current allocation facts with confidence INFERRED.
+    formula: |
+      inferred = sum of allocated amounts with confidence INFERRED for the project
+      a split uses the largest-remainder method, so the parts add up to the record exactly
+    formula_fn: alloc_inferred
+    worked_example:
+      description: Build Assistant gets 60% of the Platform team's shared cost through the rule "Platform shared cost".
+      inputs:
+        project: Build Assistant
+        state: Provider-reported
+      result: 10,755.86 USD
+    allowed_range: 0 or more.
+    validation: Rules apply in priority order; equal priorities are ordered by rule id, so the result is always the same.
+    prd_ref: FR-03 (rule-based allocation, shared-cost splitting, inferred attribution)
+
+  alloc.manual:
+    name: Manual
+    meaning: Cost that a person assigned to the project in the queue below.
+    unit: USD, two decimals.
+    source: calculated
+    source_detail: Summed from the current allocation facts with confidence MANUAL.
+    formula: |
+      manual = sum of allocated amounts with confidence MANUAL for the project
+    formula_fn: alloc_manual
+    worked_example:
+      description: Build Assistant in the demo data. Nothing has been assigned by hand yet.
+      inputs:
+        project: Build Assistant
+        state: Provider-reported
+      result: 0.00 USD
+    allowed_range: 0 or more.
+    validation: A manual assignment needs a reason and replaces the earlier allocation, which is kept as history.
+    prd_ref: FR-03 (manually assigned attribution, auditable change history)
+
+  alloc.total:
+    name: Allocated
+    meaning: All cost allocated to the project, whatever the confidence.
+    unit: USD, two decimals.
+    source: calculated
+    source_detail: Calculated from the three confidence columns.
+    formula: |
+      allocated = direct + inferred + manual
+    formula_fn: alloc_total
+    worked_example:
+      description: Build Assistant in the demo data. The sum is made in exact micro-units and then rounded, so it can differ by one cent from adding the rounded parts.
+      inputs:
+        project: Build Assistant
+        state: Provider-reported
+        direct: 21,915.33 USD
+        inferred: 10,755.86 USD
+        manual: 0.00 USD
+      result: 32,671.20 USD
+    allowed_range: 0 or more.
+    validation: Allocated, unmatched and unallocated together are always 100% of the loaded records.
+    prd_ref: FR-03 (allocation percentages reconcile to 100%)
+
+  queue.record_key:
+    name: Record
+    meaning: The provider's identifier of the billing record, with the model underneath.
+    unit: Text.
+    source: provider export
+    source_detail: Column x_RecordKey of the billing file.
+    worked_example:
+      description: The record in the demo file that names a project nobody knows.
+      result: va-2026-01-14-shadow-experiment-vendor-a-model-1
+    allowed_range: 1 to 120 letters, digits, dot, colon, dash or underscore.
+    validation: Record key and revision together must be unique per source.
+    prd_ref: FR-01 (idempotent by source, record key and revision)
+
+  queue.tags:
+    name: Tags
+    meaning: The labels the billing record carries. Allocation uses team and project.
+    unit: Text, as key=value pairs.
+    source: provider export
+    source_detail: Column Tags of the billing file.
+    worked_example:
+      description: The unmatched record in the demo file.
+      result: project=shadow-experiment team=Growth
+    allowed_range: Keys team, project, customer, application, agent, environment.
+    validation: Untrusted input. Other keys are dropped when the file is loaded. Values are shown escaped.
+    prd_ref: FR-06 (join keys), SEC-27 (allowlisted metadata keys)
+
+  queue.amount:
+    name: Amount
+    meaning: The cost of the record, with its finalization state.
+    unit: Money in the billing currency, two decimals.
+    source: provider export
+    source_detail: Column BilledCost of the billing file, read as an exact decimal.
+    worked_example:
+      description: The unmatched record in the demo file.
+      result: 42.50 USD
+    allowed_range: 0 or more, with at most six decimals in the file.
+    validation: A cost that is negative, not a number, or has more than six decimals rejects the whole file.
+    prd_ref: FR-02 (money as micro-units), FR-07 (state on every figure)
+
+  queue.state:
+    name: Why it is here
+    meaning: Why the record is not simply allocated. To review means matched on the project name alone; Unmatched means its tags fit no project; Unallocated means it has no tags.
+    unit: Text.
+    source: calculated
+    source_detail: Calculated from the record's tags and the join confidence.
+    formula: |
+      To review    when join_confidence is 70 to 89
+      Unmatched    when the record has tags and join_confidence is below 70
+      Unallocated  when the record has no tags
+    formula_fn: queue_state
+    worked_example:
+      description: The Red Team record in the demo file that is tagged with the project only.
+      inputs:
+        join_confidence: "70"
+      result: To review
+    allowed_range: One of the three.
+    validation: Calculated only. Records with confidence 90 or more do not appear in this list.
+    prd_ref: FR-06 (launch confidence thresholds), FR-03 (unallocated-spend buckets)
+
+  queue.join_confidence:
+    name: Join confidence
+    meaning: How sure the match between the record and a project is, from 0 to 100.
+    unit: Whole number, 0 to 100.
+    source: calculated
+    source_detail: Calculated from which tags are present and match.
+    formula: |
+      team and project match   = 100 - 5 for each missing optional tag, never below 90
+      project matches, no team = 70
+      no match                 = 0
+    formula_fn: queue_join_confidence
+    worked_example:
+      description: The Red Team record in the demo file carries no team tag.
+      inputs:
+        tags: project=Red Team
+      result: "70"
+    allowed_range: 0 to 100.
+    validation: 90 to 100 is accepted; 70 to 89 is accepted and listed for review; below 70 is unmatched.
+    prd_ref: FR-06 (confidence score and thresholds)
+
+  queue.assign:
+    name: Assign to project
+    meaning: Assigns the record to a project by hand. For a record under review, confirming keeps the suggested project.
+    unit: Choice from the list of projects.
+    source: user input
+    source_detail: Chosen in this row.
+    worked_example:
+      description: Assigning the shadow-experiment record to an existing project.
+      result: Lead Scoring
+    allowed_range: Projects of this tenant.
+    validation: Required, together with a reason. The earlier allocation is kept as history.
+    prd_ref: FR-03 (manual assignment, auditable change history)
+
+  queue.reason:
+    name: Reason
+    meaning: Why the record belongs to that project. It is stored with the assignment.
+    unit: Text, 10 to 300 characters.
+    source: user input
+    source_detail: Typed in this row.
+    worked_example:
+      description: A reason for a manual assignment.
+      result: Belongs to the growth pilot, confirmed by its owner.
+    allowed_range: 10 to 300 characters after trimming.
+    validation: Required. Shorter or longer text is refused and nothing is changed.
+    prd_ref: FR-03 (users can inspect the rule, source and confidence behind an amount)
+
+  upload.source:
+    name: Source
+    meaning: Which kind of file this is. Each source may supply one finalization state only.
+    unit: Choice. vendor-a usage export (Provider-reported) or vendor-a invoice (Invoiced).
+    source: user input
+    source_detail: Chosen in the form.
+    worked_example:
+      description: The source for demo/billing/vendor-a-usage-2026-01.csv.
+      result: vendor-a usage export
+    allowed_range: The listed sources.
+    validation: A file whose rows claim another state or another provider than the source is refused as a whole.
+    prd_ref: FR-07 (finalization state), FR-01 (source-specific ingestion)
+
+  upload.file:
+    name: File
+    meaning: A billing file in the FOCUS column layout.
+    unit: CSV file, UTF-8, at most 5 MB and 20,000 rows.
+    source: user input
+    source_detail: Chosen in the form. Demo files are in demo/billing in the repository.
+    worked_example:
+      description: The demo usage export.
+      result: vendor-a-usage-2026-01.csv (431 rows)
+    allowed_range: At most 5 MB, 20,000 rows, 2,000 characters per field.
+    validation: Untrusted input. The header must match exactly and every row must be valid, or nothing is loaded.
+    prd_ref: FR-01 (ingestion), FR-02 (FOCUS-compatible), SEC-28 (untrusted files)
+
+  batch.time:
+    name: Loaded at
+    meaning: When the file was handed in.
+    unit: Date and time, ISO 8601, stored in UTC. Shown as YYYY-MM-DD HH:MM:SS UTC.
+    source: system
+    source_detail: Set from the application clock.
+    worked_example:
+      description: A file loaded at the demo clock time would show this value.
+      result: "2026-01-15 09:00:00 UTC"
+    allowed_range: Any past time.
+    validation: Set by the application.
+    prd_ref: FR-01 (source-specific ingestion status), FR-02 (ingestion timestamp)
+
+  batch.file:
+    name: File
+    meaning: The name of the file as it was uploaded, with its source underneath.
+    unit: Text, at most 200 characters.
+    source: user input
+    source_detail: The uploaded file's name. A fingerprint of its content is stored with it.
+    worked_example:
+      description: The demo usage export.
+      result: vendor-a-usage-2026-01.csv (vendor-a usage export)
+    allowed_range: Any file name.
+    validation: Untrusted input, shown escaped. It is never used as a path.
+    prd_ref: FR-01 (ingestion status), SEC-27
+
+  batch.status:
+    name: Result
+    meaning: Loaded means every row was valid. Refused means at least one row was invalid and nothing from the file was loaded; the reasons are listed.
+    unit: Text. Loaded or Refused.
+    source: system
+    source_detail: Set when the file is checked.
+    worked_example:
+      description: The result for demo/billing/broken-example.csv.
+      result: Refused, with four reasons
+    allowed_range: Loaded or Refused.
+    validation: Reasons name the row and the column. They never repeat cell content.
+    prd_ref: FR-02 (a failing batch is quarantined, not loaded), SEC-28
+
+  batch.rows_total:
+    name: Rows
+    meaning: How many data rows the file had.
+    unit: Whole number.
+    source: system
+    source_detail: Counted when the file is read.
+    worked_example:
+      description: The demo usage export.
+      result: "431"
+    allowed_range: 1 to 20,000.
+    validation: Rows = New + Revised + Unchanged for a loaded file.
+    prd_ref: FR-01 (ingestion status and diagnostics)
+
+  batch.rows_new:
+    name: New
+    meaning: Rows whose record was not known before.
+    unit: Whole number.
+    source: system
+    source_detail: Counted while loading.
+    worked_example:
+      description: The demo usage export, loaded for the first time.
+      result: "431"
+    allowed_range: 0 up to Rows.
+    validation: Counted by record key per source.
+    prd_ref: FR-01 (idempotent processing)
+
+  batch.rows_revised:
+    name: Revised
+    meaning: Rows that carry a higher revision of a known record. The new revision replaces the old one in all totals; the old one is kept.
+    unit: Whole number.
+    source: system
+    source_detail: Counted while loading.
+    worked_example:
+      description: demo/billing/vendor-a-usage-2026-01-correction.csv, loaded after the usage export.
+      result: "2"
+    allowed_range: 0 up to Rows.
+    validation: A revision lower than the loaded one is refused.
+    prd_ref: FR-01 (a period can be corrected without corrupting history)
+
+  batch.rows_unchanged:
+    name: Unchanged
+    meaning: Rows that were loaded before with the same content. They are counted and nothing is written, so loading a file twice changes nothing.
+    unit: Whole number.
+    source: system
+    source_detail: Counted while loading.
+    worked_example:
+      description: The demo usage export, loaded a second time.
+      result: "431"
+    allowed_range: 0 up to Rows.
+    validation: The same record and revision with different content is refused, not overwritten.
+    prd_ref: FR-01 (duplicate ingestion produces no duplicate records)
+
+  recon.difference:
+    name: Difference
+    meaning: How far the provider's figure is from the gateway's estimate. A plus sign means the provider reports more.
+    unit: USD, two decimals, with a sign.
+    source: calculated
+    source_detail: Calculated from the two totals of the same period.
+    formula: |
+      difference = provider_reported - estimated
+    formula_fn: recon_difference
+    worked_example:
+      description: January 2026 in the demo data, after the usage export is loaded.
+      inputs:
+        provider_reported: 182,423.21 USD
+        estimated: 182,373.32 USD
+      result: +49.89 USD
+    allowed_range: Any amount. "No provider data" until a usage export is loaded.
+    validation: A comparison of two figures, not a sum. Each keeps its own state.
+    prd_ref: FR-07 (reconciliation difference)
+
+  recon.unattributed:
+    name: Not tied to a project
+    meaning: Provider-reported cost that no record's tags tie to one project. It contains shared cost split by a rule, unmatched and unallocated records.
+    unit: USD, two decimals.
+    source: calculated
+    source_detail: Calculated from the period total and the per-project figures.
+    formula: |
+      not_tied = provider_reported total
+                 - sum over projects of cost tied to the project by its tags or by hand
+    formula_fn: recon_unattributed
+    worked_example:
+      description: January 2026 in the demo data. Most of it is the Platform team's shared cost.
+      inputs:
+        provider_reported: 182,423.21 USD
+      result: 17,986.19 USD
+    allowed_range: 0 or more.
+    validation: Calculated only.
+    prd_ref: FR-07 (unmatched spending), FR-03 (unallocated-cost reporting)
+
+  recon.findings:
+    name: Uncontrolled findings
+    meaning: How many projects the provider reports clearly more usage for than the gateway recorded. That usage did not go through the gateway.
+    unit: Whole number of projects.
+    source: calculated
+    source_detail: Calculated per project from the provider-reported and the estimated figure.
+    formula: |
+      a project is flagged when
+      provider_reported - estimated > max(2% of provider_reported, 1.00 USD)
+    formula_fn: recon_findings
+    worked_example:
+      description: January 2026 in the demo data.
+      inputs:
+        flagged_projects: Lead Scoring
+      result: "1"
+    allowed_range: 0 up to the number of projects.
+    validation: Calculated only. The threshold is the PRD's proposed value and is to be tuned in a pilot.
+    prd_ref: FR-19 (uncontrolled spend detection), UX-2 (coverage badge Uncontrolled)
+
+  recon.share:
+    name: Gateway-controlled share
+    meaning: How much of the provider-reported usage of the project went through the gateway. It is never shown as 100% while egress control is not verified.
+    unit: Percentage, two decimals, rounded down.
+    source: calculated
+    source_detail: Calculated per project from the estimated and the provider-reported figure.
+    formula: |
+      share = estimated / provider_reported x 100, at most 100
+    formula_fn: recon_share
+    worked_example:
+      description: Lead Scoring in the demo data. The provider saw 30% more than the gateway.
+      inputs:
+        project: Lead Scoring
+        estimated: 2,400.00 USD
+        provider_reported: 3,120.00 USD
+      result: 76.92%
+    allowed_range: 0% to 100%. "No provider data" until a usage export is loaded.
+    validation: A computed 100% is shown as "99% or more" because the coverage badge cannot be Enforced in the MVP.
+    prd_ref: FR-19 (gateway-controlled share), UX-8 (never 100% unless Enforced), FR-05 (limitation)
+
+  recon.finding:
+    name: Finding
+    meaning: Uncontrolled means the provider reports clearly more than the gateway recorded for this project. KeepAir can show this spend but could not stop it.
+    unit: Text, with the amount.
+    source: calculated
+    source_detail: Calculated per project from the provider-reported and the estimated figure.
+    formula: |
+      uncontrolled = provider_reported - estimated
+      shown when it is above max(2% of provider_reported, 1.00 USD)
+    formula_fn: recon_finding
+    worked_example:
+      description: Lead Scoring in the demo data.
+      inputs:
+        project: Lead Scoring
+        provider_reported: 3,120.00 USD
+        estimated: 2,400.00 USD
+      result: Uncontrolled, 720.00 USD
+    allowed_range: None, or Uncontrolled with an amount.
+    validation: Calculated only. Without provider data nothing can be said either way.
+    prd_ref: FR-19 (UNCONTROLLED_SPEND), bypass route B-b, UX-2

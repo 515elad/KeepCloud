@@ -14,6 +14,22 @@
 {% macro coverage_badge(coverage) %}
 <span class="cov cov--{{ coverage.name | lower | replace('_', '-') }}" data-coverage="{{ coverage.value }}"><span class="cov__icon" aria-hidden="true">{{ {"ENFORCED": "●", "GATEWAY_ROUTED": "◐", "MONITORED": "○", "UNCONTROLLED": "△"}[coverage.name] }}</span>{{ coverage.value }}</span>
 {%- endmacro %}
+{% macro fin_chip(state) %}
+<span class="fin fin--{{ state.value | lower | replace('_', '-') }}" data-finalization="{{ state.value }}"><span class="fin__swatch" aria-hidden="true"></span>{{ {"ESTIMATED": "Estimated", "PROVIDER_REPORTED": "Provider-reported", "INVOICED": "Invoiced"}[state.value] }}</span>
+{%- endmacro %}
+{% macro state_totals(totals, help) %}
+<dl class="kpis" data-totals>
+  {% for t in totals %}
+  {% set fid = {"ESTIMATED": "cost.estimated", "PROVIDER_REPORTED": "cost.provider_reported", "INVOICED": "cost.invoiced"}[t.figure.state.value] %}
+  <div data-kpi data-field-id="{{ fid }}" data-state="{{ t.figure.state.value }}">
+    <dt>{{ help.name(fid) }} {{ help.button(fid) }}</dt>
+    <dd class="num">{% if t.has_data %}{{ t.text }}{% else %}No data{% endif %}</dd>
+    <dd>{{ fin_chip(t.figure.state) }}</dd>
+  </div>
+  {% endfor %}
+</dl>
+<p class="hint">Each figure has its own state and they are never added together. An estimate is not a charge.</p>
+{%- endmacro %}
 {% macro pending(decision) %}<span class="pending" data-pending="{{ decision }}">Pending decision <code>{{ decision }}</code></span>{% endmacro %}
 {% macro db_notice(state) %}
 {% if not state.database_reachable %}

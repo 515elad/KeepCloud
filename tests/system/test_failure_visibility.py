@@ -192,7 +192,29 @@ def inject_spool_corrupt(settings, engine, unreachable_engine, monkeypatch, tmp_
     return ui
 
 
+# --- Spend data failure paths (phase 4): raised by the UI process when a file is handed in
+
+
+def inject_ingest_quarantined(settings, engine, unreachable_engine, monkeypatch):
+    from tests.system.conftest import upload
+
+    ui = make_ui(settings, engine)
+    bad = b"secret-detail-that-must-not-leak,not,a,billing,file\n1,2,3,4,5\n"
+    assert upload(ui, "broken.csv", data=bad).status_code == 422
+    return ui
+
+
+def inject_uncontrolled_spend(settings, engine, unreachable_engine, monkeypatch):
+    from tests.system.conftest import upload
+
+    ui = make_ui(settings, engine)
+    assert upload(ui, "vendor-a-usage-2026-01.csv").status_code == 303
+    return ui
+
+
 INJECTORS = {
+    "INGEST_QUARANTINED": inject_ingest_quarantined,
+    "UNCONTROLLED_SPEND": inject_uncontrolled_spend,
     "FAIL_OPEN": gateway_failure(_fail_open),
     "FAIL_OPEN_PROLONGED": gateway_failure(_fail_open_prolonged),
     "SPOOL_WRITE_FAILED": gateway_failure(_spool_write_failed),

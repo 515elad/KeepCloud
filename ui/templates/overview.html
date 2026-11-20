@@ -1,5 +1,13 @@
 {% extends "page.html" %}
 {% block content %}
+{% if period %}
+<section aria-labelledby="summary-title">
+  <h2 id="summary-title">Spend in {{ period.strftime("%Y-%m") }}</h2>
+  {{ state_totals(totals, help) }}
+  <p><a href="/spend">Open Spend</a> for models, projects and the records that are not allocated yet. <a href="/reconciliation">Open Reconciliation</a> to compare the estimate with the provider's figures.</p>
+</section>
+{% endif %}
+
 <section aria-labelledby="demo-title">
   <h2 id="demo-title">Demo data</h2>
   <dl class="kpis">

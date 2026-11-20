@@ -217,10 +217,11 @@ def test_health_strip_goes_live_with_the_gateway_and_degrades_when_it_stops(ui_t
             for li in ui.soup("/budgets").select(".health li")
         }
 
-    assert set(strip().values()) == {"Unknown"}
+    # Before the gateway's first upkeep round only the data source is known (a file was loaded).
+    assert strip() == {c: "Unknown" for c in strip()} | {"data_sources": "Healthy"}
     ui.gw.app.state.maintenance.tick()
     assert strip() == {"gateway": "Healthy", "policy_sync": "Healthy", "ledger": "Healthy", "alerting": "Healthy",
-                       "egress": "Unknown", "data_sources": "Unknown"}  # fmt: skip
+                       "egress": "Unknown", "data_sources": "Healthy"}  # fmt: skip
     healthy = ui.soup("/").select_one(".health li[data-component=gateway] .status")
     assert (
         healthy["class"] == ["status", "status--healthy"]

@@ -137,7 +137,11 @@ def load_scope_names(conn: Connection, tenant_id: uuid.UUID) -> dict[uuid.UUID, 
     return names
 
 
-def load_budget_rows(conn: Connection, tenant_id: uuid.UUID) -> list[BudgetRow]:
+def load_budget_rows(
+    conn: Connection, tenant_id: uuid.UUID, uncontrolled: set[uuid.UUID] | None = None
+) -> list[BudgetRow]:
+    """``uncontrolled``: projects with an uncontrolled-spend finding (FR-19)."""
+    uncontrolled = uncontrolled or set()
     all_budgets = B.load_budgets(conn, tenant_id)
     names = load_scope_names(conn, tenant_id)
     project_rows = {
@@ -166,8 +170,9 @@ def load_budget_rows(conn: Connection, tenant_id: uuid.UUID) -> list[BudgetRow]:
         coverage = None
         if b.scope_type == "PROJECT" and b.scope_id in project_rows:
             p = project_rows[b.scope_id]
-            # Uncontrolled findings (FR-19) arrive with reconciliation in phase 4.
-            coverage = coverage_state(p.key_custody, p.egress_verified, uncontrolled_finding=False)
+            coverage = coverage_state(
+                p.key_custody, p.egress_verified, uncontrolled_finding=p.id in uncontrolled
+            )
         u = B.usage(b)
         parent = all_budgets.get(b.parent_id) if b.parent_id else None
         rows.append(

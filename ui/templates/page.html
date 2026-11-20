@@ -22,7 +22,7 @@
     {% for section in page.sections %}
     <li>
       <span class="roadmap__title">{{ section.title }}</span>
-      <span class="roadmap__phase">Coming in phase {{ section.phase }}</span>
+      <span class="roadmap__phase">{% if section.phase %}Coming in phase {{ section.phase }}{% else %}Not in the MVP phases{% endif %}</span>
       <span class="roadmap__reqs">{% for req in section.reqs %}<code>{{ req }}</code>{% endfor %}</span>
     </li>
     {% endfor %}

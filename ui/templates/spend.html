@@ -1,0 +1,170 @@
+{% extends "page.html" %}
+{% block content %}
+{% if upload_result %}
+<div class="notice notice--bad" role="alert" data-upload-result="{{ upload_result.status }}">
+  <p><span aria-hidden="true">×</span> The file was refused and nothing from it was loaded.</p>
+  <ul>{% for reason in upload_result.reasons %}<li>{{ reason }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+{% if period %}
+<svg class="defs" aria-hidden="true" focusable="false" width="0" height="0">
+  <defs><pattern id="hatch" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect class="hatch__bg" width="4" height="4"/><line class="hatch__line" x1="0" y1="0" x2="0" y2="4"/></pattern></defs>
+</svg>
+<section aria-labelledby="totals-title">
+  <h2 id="totals-title">Totals</h2>
+  <dl class="facts">
+    <div data-kpi data-field-id="spend.period"><dt>{{ help.name("spend.period") }} {{ help.button("spend.period") }}</dt><dd><span class="num">{{ period.strftime("%Y-%m") }}</span> <span class="sub">Billing periods are calendar months in UTC. {% for p in periods if p != period %}<a href="/spend?period={{ p.strftime('%Y-%m') }}">{{ p.strftime("%Y-%m") }}</a> {% endfor %}</span></dd></div>
+  </dl>
+  {{ state_totals(totals, help) }}
+</section>
+
+<section aria-labelledby="explorer-title">
+  <h2 id="explorer-title">Cost by model</h2>
+  <p class="hint">One small chart per model, all on the same scale (top of each chart: {{ scale_top }}). One group of bars per day, in UTC. {{ fin_chip(totals[0].figure.state) }} is hatched; {{ fin_chip(totals[1].figure.state) }} and {{ fin_chip(totals[2].figure.state) }} are solid.</p>
+  <div class="multiples">
+    {% for chart in charts %}
+    <figure class="multiple" data-kpi data-field-id="cost.model_chart" data-model="{{ chart.model }}">
+      <figcaption><code>{{ chart.model }}</code> {{ help.button("cost.model_chart") }}</figcaption>
+      <svg viewBox="0 0 300 84" role="img" aria-label="{{ chart.model }}. {{ chart.summary }}" preserveAspectRatio="none">
+        <line class="chart__axis" x1="0" y1="83.5" x2="300" y2="83.5"/>
+        {% for bar in chart.bars %}<rect class="chart__bar chart__bar--{{ bar.state }}" x="{{ bar.x }}" y="{{ bar.y }}" width="{{ bar.width }}" height="{{ bar.height }}"{% if bar.state == "estimated" %} fill="url(#hatch)"{% endif %}/>{% endfor %}
+      </svg>
+      <p class="multiple__axis" aria-hidden="true"><span>{{ chart.days[0][0].isoformat() }}</span><span>UTC</span><span>{{ chart.days[-1][0].isoformat() }}</span></p>
+      <p class="multiple__summary">{{ chart.summary }}</p>
+      <details>
+        <summary>Show as table</summary>
+        <div class="table-wrap">
+          <table class="dense" data-table="model-days">
+            <thead><tr>{{ help.th("cost.day") }}{{ help.th("cost.estimated") }}{{ help.th("cost.provider_reported") }}{{ help.th("cost.invoiced") }}</tr></thead>
+            <tbody>
+              {% for day, cell in chart.days %}
+              <tr><td class="num">{{ day.isoformat() }}</td>{% for key in ("ESTIMATED", "PROVIDER_REPORTED", "INVOICED") %}<td class="num amount">{% if key in cell %}{{ "{:,.2f}".format(cell[key] / 1000000) }}{% else %}<span aria-hidden="true">–</span><span class="sr-only">No data</span>{% endif %}</td>{% endfor %}</tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </figure>
+    {% else %}
+    <p class="empty-state">No cost data in this period.</p>
+    {% endfor %}
+  </div>
+</section>
+
+<section aria-labelledby="allocation-title">
+  <h2 id="allocation-title">Allocation by project</h2>
+  {% for table in allocations %}
+  <p class="hint">Billing records with state {{ fin_chip(table.state) }}, in USD. Direct: the record's tags name the team and the project. Inferred: split by a rule, or matched on the project name alone. Manual: assigned by hand.</p>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Allocation of {{ table.label }} cost">
+    <table class="dense" data-table="allocation" data-state="{{ table.state.value }}">
+      <thead><tr>{{ help.th("alloc.project") }}{{ help.th("alloc.direct") }}{{ help.th("alloc.inferred") }}{{ help.th("alloc.manual") }}{{ help.th("alloc.total") }}</tr></thead>
+      <tbody>
+        {% for row in table.rows %}
+        <tr data-project="{{ row.project }}">
+          <td>{{ row.project }}<span class="sub">{{ row.team }}</span></td>
+          <td class="num amount">{{ row.text(row.direct) }}</td>
+          <td class="num amount">{{ row.text(row.inferred) }}{% if row.to_review %}<span class="warn"><span aria-hidden="true">!</span> {{ row.text(row.to_review) }} to review</span>{% endif %}</td>
+          <td class="num amount">{{ row.text(row.manual) }}</td>
+          <td class="num amount">{{ row.text(row.total) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr data-total="allocated"><td colspan="4">Allocated to projects</td><td class="num amount">{{ table.text(table.allocated) }} <span class="sub">{{ table.share_text(table.allocated) }}</span></td></tr>
+        <tr data-total="unmatched"><td colspan="4">Unmatched: tags that fit no project</td><td class="num amount">{{ table.text(table.unmatched) }} <span class="sub">{{ table.share_text(table.unmatched) }}</span></td></tr>
+        <tr data-total="unallocated"><td colspan="4">Unallocated: no tags</td><td class="num amount">{{ table.text(table.unallocated) }} <span class="sub">{{ table.share_text(table.unallocated) }}</span></td></tr>
+        <tr data-total="records"><td colspan="4">All records ({{ table.label }})</td><td class="num amount">{{ table.text(table.record_total) }} <span class="sub">100.00%</span></td></tr>
+      </tfoot>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty-state" data-empty="allocation">No billing file is loaded for this period, so there is nothing to allocate yet. The gateway's own estimates are in the charts above. Upload a billing file below.</p>
+  {% endfor %}
+</section>
+
+<section aria-labelledby="queue-title">
+  <h2 id="queue-title">Records that need a decision</h2>
+  {% if queue %}
+  <p class="hint">Nothing here is assigned by guessing. A fallback join (confidence 70 to 89) is accepted but listed for review.</p>
+  <div class="table-wrap" tabindex="0" role="region" aria-labelledby="queue-title">
+    <table class="dense" data-table="queue">
+      <thead><tr>{{ help.th("queue.record_key") }}{{ help.th("cost.day") }}{{ help.th("queue.tags") }}{{ help.th("queue.amount") }}{{ help.th("queue.state") }}{{ help.th("queue.join_confidence") }}{{ help.th("queue.reason") }}{{ help.th("queue.assign") }}</tr></thead>
+      <tbody>
+        {% for q in queue %}
+        <tr data-queue-state="{{ q.state }}">
+          <td><code>{{ q.record_key }}</code><span class="sub"><code>{{ q.model }}</code></span></td>
+          <td class="num">{{ q.charge_date.isoformat() }}</td>
+          <td>{% for key, value in q.tags %}<code>{{ key }}={{ value }}</code> {% else %}<span class="sub">No tags</span>{% endfor %}</td>
+          <td class="num amount">{{ q.amount_text }}<span class="sub">{{ fin_chip(q.finalization) }}</span></td>
+          <td><span class="qstate qstate--{{ q.state | lower }}"><span aria-hidden="true">{{ {"REVIEW": "!", "UNMATCHED": "?", "UNALLOCATED": "○"}[q.state] }}</span> {{ q.state_label }}</span><span class="sub">{{ q.explanation }}</span></td>
+          <td class="num amount">{{ q.join_confidence }}</td>
+          <td>
+            <label class="sr-only" for="reason-{{ loop.index }}" data-field-id="queue.reason">Reason for {{ q.record_key }}</label>
+            <input type="text" id="reason-{{ loop.index }}" name="reason" form="assign-{{ loop.index }}" data-field-id="queue.reason" placeholder="At least 10 characters" minlength="10" maxlength="300" required>
+          </td>
+          <td>
+            <form method="post" action="/spend/assign" class="assign" id="assign-{{ loop.index }}">
+              <input type="hidden" name="record_id" value="{{ q.record_id }}">
+              <label class="sr-only" for="project-{{ loop.index }}" data-field-id="queue.assign">Project for {{ q.record_key }}</label>
+              <select id="project-{{ loop.index }}" name="project_id" data-field-id="queue.assign" required>
+                {% if not q.suggested_project_id %}<option value="">Choose a project</option>{% endif %}
+                {% for project_id, name in projects %}<option value="{{ project_id }}"{% if project_id == q.suggested_project_id %} selected{% endif %}>{{ name }}</option>{% endfor %}
+              </select>
+              <button type="submit" class="btn btn--small">{{ "Confirm" if q.state == "REVIEW" else "Assign" }}</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty-state" data-empty="queue">{% if allocations %}Every loaded record is allocated to a project.{% else %}No billing records are loaded for this period.{% endif %}</p>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if state.tenant_id %}
+<section aria-labelledby="upload-title">
+  <h2 id="upload-title">Load a billing file</h2>
+  <p class="hint">CSV in the FOCUS column layout, at most 5 MB. Demo files are in the folder <code>demo/billing</code> of the repository. Loading the same file twice changes nothing. A file with any invalid row is refused as a whole. Invoices are loaded as files; no provider invoice API is used. {{ pending("D-05") }}</p>
+  <form method="post" action="/spend/upload" enctype="multipart/form-data" class="form form--inline">
+    <div class="field">
+      <div class="field__label"><label for="source" data-field-id="upload.source">{{ help.name("upload.source") }}</label> {{ help.button("upload.source") }}</div>
+      <select id="source" name="source" data-field-id="upload.source" required>
+        {% for s in sources or [] %}<option value="{{ s.id }}">{{ s.label }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <div class="field__label"><label for="file" data-field-id="upload.file">{{ help.name("upload.file") }}</label> {{ help.button("upload.file") }}</div>
+      <input type="file" id="file" name="file" data-field-id="upload.file" accept=".csv,text/csv" required>
+    </div>
+    <p class="actions"><button type="submit" class="btn">Load file</button></p>
+  </form>
+</section>
+
+<section aria-labelledby="history-title">
+  <h2 id="history-title">Ingestion history</h2>
+  <div class="table-wrap" tabindex="0" role="region" aria-labelledby="history-title">
+    <table class="dense" data-table="batches">
+      <thead><tr>{{ help.th("batch.time") }}{{ help.th("batch.file") }}{{ help.th("batch.status") }}{{ help.th("batch.rows_total") }}{{ help.th("batch.rows_new") }}{{ help.th("batch.rows_revised") }}{{ help.th("batch.rows_unchanged") }}</tr></thead>
+      <tbody>
+        {% for b in batches or [] %}
+        <tr data-batch-status="{{ b.status }}">
+          <td class="num"><time datetime="{{ b.ingested_at.isoformat() }}">{{ b.ingested_at | ts }}</time></td>
+          <td>{{ b.file_name }}<span class="sub">{{ b.source_label }}</span></td>
+          <td>{% if b.status == "LOADED" %}<span class="reg reg--allowed"><span aria-hidden="true">✓</span> Loaded</span>{% else %}<span class="reg reg--blocked"><span aria-hidden="true">⛔</span> Refused</span><ul class="reasons">{% for reason in b.reasons %}<li>{{ reason }}</li>{% endfor %}</ul>{% endif %}</td>
+          <td class="num amount">{{ b.rows_total }}</td>
+          <td class="num amount">{{ b.rows_new }}</td>
+          <td class="num amount">{{ b.rows_revised }}</td>
+          <td class="num amount">{{ b.rows_unchanged }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="empty">No billing file has been loaded.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+{% endblock %}

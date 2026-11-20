@@ -63,7 +63,24 @@ def ui_traffic(settings, engine) -> Ui:
     gw.chat("Ticket Triage", "va-fast")  # allowed
     ui = make_ui(settings, engine, gateway_client=gw.client)  # the UI talks to this gateway
     ui.gw = gw
+    assert upload(ui, "vendor-a-usage-2026-01.csv").status_code == 303  # billing data is loaded too
     return ui
+
+
+def upload(ui, name: str, source: str | None = None, data: bytes | None = None):
+    """Upload a demo billing file through the Spend page's form, as a browser would."""
+    from keepair.config import REPO_ROOT
+
+    if data is None:
+        data = (REPO_ROOT / "demo" / "billing" / name).read_bytes()
+    source = source or ("vendor-a-invoice" if "invoice" in name else "vendor-a-usage")
+    return ui.client.post(
+        "/spend/upload",
+        data={"source": source},
+        files={"file": (name, data, "text/csv")},
+        headers={"Origin": "http://testserver"},
+        follow_redirects=False,
+    )
 
 
 @pytest.fixture

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True, slots=True)
 class Section:
     title: str
-    phase: int
+    phase: int | None  # None: not part of the MVP phases
     reqs: tuple[str, ...]
 
 
@@ -30,8 +30,17 @@ PAGES: tuple[Page, ...] = (
         "Overview",
         "Where spend stands, what is unowned, and whether the controls are working.",
         (
-            Section("Executive summary", 4, ("FR-12",)),
             Section("Unowned spend bucket", 5, ("FR-17",)),
+            Section("Forecast and anomaly alerts", None, ("FR-08",)),
+        ),
+    ),
+    Page(
+        "spend",
+        "Spend",
+        "What was spent, by model and by project, and how sure each figure is.",
+        (
+            Section("Allocation rule editor", None, ("FR-03",)),
+            Section("Cloud billing connectors (AWS, Azure, GCP)", None, ("FR-01",)),
         ),
     ),
     Page(
@@ -60,8 +69,8 @@ PAGES: tuple[Page, ...] = (
         "Reconciliation",
         "Estimates compared with provider records and invoices, by period.",
         (
-            Section("Finalization by period", 4, ("FR-07", "UX-8")),
-            Section("Unallocated and unmatched queue", 4, ("FR-03", "FR-06")),
+            Section("Invoice PDF upload and review queue", None, ("FR-07",)),
+            Section("Period close and locking", None, ("FR-12",)),
         ),
     ),
     Page(

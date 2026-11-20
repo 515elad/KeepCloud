@@ -1,0 +1,41 @@
+{% extends "page.html" %}
+{% block content %}
+{% if period %}
+<section aria-labelledby="totals-title">
+  <h2 id="totals-title">Period {{ period.strftime("%Y-%m") }}</h2>
+  <p class="hint">Billing periods are calendar months in UTC. Amounts are in USD, the currency of the price list and of the provider's bill. {% for p in periods if p != period %}<a href="/reconciliation?period={{ p.strftime('%Y-%m') }}">{{ p.strftime("%Y-%m") }}</a> {% endfor %}</p>
+  {{ state_totals(totals, help) }}
+  <dl class="kpis">
+    <div data-kpi data-field-id="recon.difference"><dt>{{ help.name("recon.difference") }} {{ help.button("recon.difference") }}</dt><dd class="num">{{ recon.difference_text }}</dd></div>
+    <div data-kpi data-field-id="recon.unattributed"><dt>{{ help.name("recon.unattributed") }} {{ help.button("recon.unattributed") }}</dt><dd class="num">{{ recon.unattributed_text }}</dd></div>
+    <div data-kpi data-field-id="recon.findings"><dt>{{ help.name("recon.findings") }} {{ help.button("recon.findings") }}</dt><dd class="num{% if recon.findings %} is-over{% endif %}">{{ recon.findings }}</dd></div>
+  </dl>
+</section>
+
+<section aria-labelledby="projects-title">
+  <h2 id="projects-title">By project</h2>
+  <p class="hint">Only cost that the billing record's tags tie to the project itself is compared here. Shared cost split by a rule is in "Not tied to a project" above. A project is flagged when the provider reports more than the gateway recorded, by more than 2% and more than 1.00 USD.</p>
+  <div class="table-wrap" tabindex="0" role="region" aria-labelledby="projects-title">
+    <table class="dense" data-table="reconciliation">
+      <thead><tr>{{ help.th("alloc.project") }}{{ help.th("cost.estimated") }}{{ help.th("cost.provider_reported") }}{{ help.th("cost.invoiced") }}{{ help.th("recon.difference") }}{{ help.th("recon.share") }}{{ help.th("recon.finding") }}</tr></thead>
+      <tbody>
+        {% for row in recon.rows %}
+        <tr data-project="{{ row.project }}"{% if row.uncontrolled_text %} data-uncontrolled{% endif %}>
+          <td>{{ row.project }}</td>
+          <td class="num amount">{{ row.estimated_text }}</td>
+          <td class="num amount">{% if row.has_provider %}{{ row.provider_text }}{% else %}<span class="sub">No data</span>{% endif %}</td>
+          <td class="num amount">{{ row.invoiced_text }}</td>
+          <td class="num amount">{{ row.difference_text }}</td>
+          <td data-share>{% if row.share_pct is not none %}<span class="share" aria-hidden="true"><span class="share__fill w-{{ row.share_pct }}"></span></span>{% endif %}<span class="sub">{{ row.share_text }}</span></td>
+          <td>{% if row.uncontrolled_text %}<span class="cov cov--uncontrolled" data-coverage="Uncontrolled"><span class="cov__icon" aria-hidden="true">△</span>Uncontrolled</span><span class="sub">{{ row.uncontrolled_text }} more at the provider than through the gateway</span>{% elif row.has_provider %}<span class="sub">None</span>{% else %}<span class="sub">Cannot tell without provider data</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="hint">Estimated {{ fin_chip(totals[0].figure.state) }}, provider-reported {{ fin_chip(totals[1].figure.state) }} and invoiced {{ fin_chip(totals[2].figure.state) }} are separate columns and are never added.</p>
+</section>
+{% elif state.tenant_id %}
+<p class="empty-state">No cost data yet.</p>
+{% endif %}
+{% endblock %}

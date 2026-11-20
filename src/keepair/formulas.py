@@ -12,15 +12,19 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import date
 
-from sqlalchemy import Connection, select
+from sqlalchemy import Connection, func, select
 
 from keepair import budgets as B
+from keepair.billing.ingest import ingest
 from keepair.clock import Clock, to_iso
 from keepair.coverage import coverage_state
+from keepair.demo import billing as demo_billing
 from keepair.health import COMPONENTS, health_status
-from keepair.schema import app_meta, heartbeats, projects
-from keepair.web import views
+from keepair.rng import DEMO_SEED, seeded_rng
+from keepair.schema import app_meta, heartbeats, normalized_cost_records, projects
+from keepair.web import spend_views, views
 from keepair.web.formatting import format_money
 
 EXAMPLE_PROJECT = "Research Agent"
@@ -227,6 +231,126 @@ def _console_limit_kind(conn: Connection, clock: Clock) -> Evaluated:
     )
 
 
+# --- Spend data (phase 4). The worked examples describe the demo data after the two demo
+# billing files (usage export and invoice) are loaded, so they are loaded here first, inside
+# the caller's transaction.
+
+EXAMPLE_PERIOD = date(2026, 1, 1)
+EXAMPLE_ALLOC_PROJECT = "Build Assistant"
+EXAMPLE_RECON_PROJECT = "Lead Scoring"
+
+
+def _with_billing(conn: Connection, clock: Clock) -> uuid.UUID:
+    tenant = _tenant(conn)
+    loaded = conn.execute(select(func.count()).select_from(normalized_cost_records)).scalar_one()
+    if not loaded:
+        files = demo_billing.generate()
+        rng = seeded_rng(DEMO_SEED + 9)
+        for source, name in (("vendor-a-usage", demo_billing.USAGE_FILE),
+                             ("vendor-a-invoice", demo_billing.INVOICE_FILE)):  # fmt: skip
+            ingest(conn, tenant_id=tenant, source=source, file_name=name, data=files[name],
+                   actor="worked-example", clock=clock, rng=rng)  # fmt: skip
+    return tenant
+
+
+def _totals(conn: Connection, clock: Clock) -> list[spend_views.StateTotal]:
+    return spend_views.state_totals(conn, _with_billing(conn, clock), EXAMPLE_PERIOD)
+
+
+def _cost_state(index: int, source: str):
+    def evaluate(conn: Connection, clock: Clock) -> Evaluated:
+        total = _totals(conn, clock)[index]
+        return Evaluated({"period": "2026-01", "records_from": source}, total.text)
+
+    return evaluate
+
+
+def _cost_model_chart(conn: Connection, clock: Clock) -> Evaluated:
+    charts, top = spend_views.explorer(conn, _with_billing(conn, clock), EXAMPLE_PERIOD)
+    chart = next(c for c in charts if c.model == "vendor-a/model-1")
+    return Evaluated({"model": chart.model, "scale_top": top}, chart.summary)
+
+
+def _allocation_row(conn: Connection, clock: Clock) -> spend_views.AllocationRow:
+    tables = spend_views.allocation_tables(conn, _with_billing(conn, clock), EXAMPLE_PERIOD)
+    return next(r for r in tables[0].rows if r.project == EXAMPLE_ALLOC_PROJECT)
+
+
+def _alloc(part: str):
+    def evaluate(conn: Connection, clock: Clock) -> Evaluated:
+        row = _allocation_row(conn, clock)
+        inputs = {"project": row.project, "state": "Provider-reported"}
+        if part == "total":
+            inputs |= {"direct": row.text(row.direct), "inferred": row.text(row.inferred),
+                       "manual": row.text(row.manual)}  # fmt: skip
+        return Evaluated(inputs, row.text(getattr(row, part)))
+
+    return evaluate
+
+
+def _queue_review(conn: Connection, clock: Clock) -> spend_views.QueueRow:
+    rows = spend_views.queue(conn, _with_billing(conn, clock), EXAMPLE_PERIOD)
+    return next(
+        r for r in rows if r.state == "REVIEW" and r.finalization.value == "PROVIDER_REPORTED"
+    )
+
+
+def _queue_join_confidence(conn: Connection, clock: Clock) -> Evaluated:
+    row = _queue_review(conn, clock)
+    tags = ", ".join(f"{k}={v}" for k, v in row.tags)
+    return Evaluated({"tags": tags}, str(row.join_confidence))
+
+
+def _queue_state(conn: Connection, clock: Clock) -> Evaluated:
+    row = _queue_review(conn, clock)
+    return Evaluated({"join_confidence": str(row.join_confidence)}, row.state_label)
+
+
+def _recon(conn: Connection, clock: Clock) -> tuple[spend_views.Reconciliation, list]:
+    tenant = _with_billing(conn, clock)
+    totals = spend_views.state_totals(conn, tenant, EXAMPLE_PERIOD)
+    return spend_views.reconciliation(conn, tenant, EXAMPLE_PERIOD, totals), totals
+
+
+def _recon_difference(conn: Connection, clock: Clock) -> Evaluated:
+    recon, totals = _recon(conn, clock)
+    return Evaluated(
+        {"provider_reported": totals[1].text, "estimated": totals[0].text}, recon.difference_text
+    )
+
+
+def _recon_unattributed(conn: Connection, clock: Clock) -> Evaluated:
+    recon, totals = _recon(conn, clock)
+    return Evaluated({"provider_reported": totals[1].text}, recon.unattributed_text)
+
+
+def _recon_findings(conn: Connection, clock: Clock) -> Evaluated:
+    recon, _ = _recon(conn, clock)
+    flagged = ", ".join(r.project for r in recon.rows if r.uncontrolled_text)
+    return Evaluated({"flagged_projects": flagged}, str(recon.findings))
+
+
+def _recon_row(conn: Connection, clock: Clock) -> spend_views.ReconRow:
+    recon, _ = _recon(conn, clock)
+    return next(r for r in recon.rows if r.project == EXAMPLE_RECON_PROJECT)
+
+
+def _recon_share(conn: Connection, clock: Clock) -> Evaluated:
+    row = _recon_row(conn, clock)
+    return Evaluated({"project": row.project, "estimated": row.estimated_text,
+                      "provider_reported": row.provider_text}, row.share_text)  # fmt: skip
+
+
+def _recon_finding(conn: Connection, clock: Clock) -> Evaluated:
+    row = _recon_row(conn, clock)
+    inputs = {
+        "project": row.project,
+        "provider_reported": row.provider_text,
+        "estimated": row.estimated_text,
+    }
+    return Evaluated(inputs, f"Uncontrolled, {row.uncontrolled_text}")
+
+
 FORMULAS: dict[str, Callable[[Connection, Clock], Evaluated]] = {
     "health_status": _health_status,
     "coverage_state": _coverage_state,
@@ -246,4 +370,19 @@ FORMULAS: dict[str, Callable[[Connection, Clock], Evaluated]] = {
     "fail_open_events": _fail_open_events,
     "fail_open_unacknowledged": _fail_open_unacknowledged,
     "console_limit_kind": _console_limit_kind,
+    "cost_estimated": _cost_state(0, "gateway usage records"),
+    "cost_provider_reported": _cost_state(1, "vendor-a usage export"),
+    "cost_invoiced": _cost_state(2, "vendor-a invoice"),
+    "cost_model_chart": _cost_model_chart,
+    "alloc_direct": _alloc("direct"),
+    "alloc_inferred": _alloc("inferred"),
+    "alloc_manual": _alloc("manual"),
+    "alloc_total": _alloc("total"),
+    "queue_join_confidence": _queue_join_confidence,
+    "queue_state": _queue_state,
+    "recon_difference": _recon_difference,
+    "recon_unattributed": _recon_unattributed,
+    "recon_findings": _recon_findings,
+    "recon_share": _recon_share,
+    "recon_finding": _recon_finding,
 }

@@ -13,23 +13,36 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
 from sqlalchemy import Engine, func, insert, select, text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from keepair import __version__
+from keepair.billing import reconcile
+from keepair.billing.finalization import SOURCES
+from keepair.billing.focus import MAX_BYTES, Quarantine
+from keepair.billing.ingest import BatchResult, ingest, reallocate, record_batch
 from keepair.clock import Clock, SystemClock, from_iso
 from keepair.config import Settings
 from keepair.db import make_engine
 from keepair.demo.seed import agent_name, demo_token
 from keepair.failures import Alert, AlertStore, FailureReporter
 from keepair.gateway.tokens import generate_token, hash_token
-from keepair.health import ComponentHealth, read_health, unknown_health
+from keepair.health import ComponentHealth, read_health, record_heartbeat, unknown_health
 from keepair.help_registry import HelpRegistry
 from keepair.ids import uuid7
 from keepair.metrics import Metrics
 from keepair.registry import RegistryError, add_block
 from keepair.rng import system_rng
-from keepair.schema import agents, app_meta, fail_events, gateway_credentials
-from keepair.web import views
+from keepair.schema import (
+    agents,
+    app_meta,
+    fail_events,
+    gateway_credentials,
+    manual_allocations,
+    normalized_cost_records,
+    projects,
+)
+from keepair.web import spend_views, views
 from keepair.web.formatting import format_ts
 from keepair.web.helpui import HelpContext
 from keepair.web.pages import PAGES, PAGES_BY_SLUG, Page
@@ -163,8 +176,14 @@ def create_app(
         return HTMLResponse(html, status_code=status_code)
 
     def render_page(page: Page) -> HTMLResponse:
-        template = "overview.html" if page.slug == "overview" else "page.html"
-        return render(template, page=page, state=load_state())
+        state = load_state()
+        if page.slug != "overview":
+            return render("page.html", page=page, state=state)
+        try:
+            summary = spend_context(state, None)
+        except SQLAlchemyError:
+            summary = {"period": None}  # the page's own notice already says the database is down
+        return render("overview.html", page=page, state=state, **summary)
 
     @app.get("/", response_class=HTMLResponse)
     def overview() -> HTMLResponse:
@@ -188,7 +207,9 @@ def create_app(
         rows = None
         if state.tenant_id:
             with engine.connect() as conn:
-                rows = views.load_budget_rows(conn, state.tenant_id)
+                rows = views.load_budget_rows(
+                    conn, state.tenant_id, reconcile.uncontrolled_projects(conn, state.tenant_id)
+                )
         return render("budgets.html", page=page, state=state, rows=rows)
 
     @app.get("/budgets/{budget_id}", response_class=HTMLResponse)
@@ -197,7 +218,9 @@ def create_app(
         row = None
         if state.tenant_id:
             with engine.connect() as conn:
-                rows = views.load_budget_rows(conn, state.tenant_id)
+                rows = views.load_budget_rows(
+                    conn, state.tenant_id, reconcile.uncontrolled_projects(conn, state.tenant_id)
+                )
             row = next((r for r in rows if r.id == budget_id), None)
         if row is None and state.database_reachable:
             raise HTTPException(status_code=404)
@@ -338,6 +361,133 @@ def create_app(
         except RegistryError as exc:
             return block_form(subject_type, subject_id, reason, str(exc))
         return RedirectResponse(f"/gateway#{subject_type}s-title", status_code=303)
+
+    # --- Spend data: explorer, allocation, upload, reconciliation (phase 4) ---------
+
+    def spend_context(state: PageState, period_text: str | None) -> dict:
+        if not state.tenant_id:
+            return {"period": None}
+        with engine.connect() as conn:
+            found, default = spend_views.periods(conn, state.tenant_id)
+            period = spend_views.parse_period(period_text, found, default)
+            context = {"period": period, "periods": found}
+            if period is None:
+                return context
+            totals = spend_views.state_totals(conn, state.tenant_id, period)
+            charts, scale_top = spend_views.explorer(conn, state.tenant_id, period)
+            context.update(
+                totals=totals,
+                charts=charts,
+                scale_top=scale_top,
+                allocations=spend_views.allocation_tables(conn, state.tenant_id, period),
+                queue=spend_views.queue(conn, state.tenant_id, period),
+                batches=spend_views.batches(conn, state.tenant_id),
+                projects=spend_views.project_choices(conn, state.tenant_id),
+                recon=spend_views.reconciliation(conn, state.tenant_id, period, totals),
+                sources=list(SOURCES.values()),
+            )
+        return context
+
+    @app.get("/spend", response_class=HTMLResponse)
+    def spend_page(period: str | None = None, status_code: int = 200) -> HTMLResponse:
+        page, state = page_context("spend")
+        return render("spend.html", page=page, state=state, upload_result=None,
+                      **spend_context(state, period))  # fmt: skip
+
+    @app.get("/reconciliation", response_class=HTMLResponse)
+    def reconciliation_page(period: str | None = None) -> HTMLResponse:
+        page, state = page_context("reconciliation")
+        return render("reconciliation.html", page=page, state=state, **spend_context(state, period))
+
+    @app.post("/spend/upload", response_class=HTMLResponse)
+    async def spend_upload(request: Request):
+        """Load a billing file. It is untrusted: limits first, then strict parsing (SEC-28)."""
+        declared = request.headers.get("content-length", "")
+        if not declared.isdigit() or int(declared) > MAX_BYTES + 64 * 1024:
+            raise HTTPException(status_code=413)
+        form = await request.form(max_files=1, max_fields=4)
+        upload, source = form.get("file"), str(form.get("source", ""))
+        if not hasattr(upload, "read"):
+            raise HTTPException(status_code=422)
+        data = await upload.read(MAX_BYTES + 1)
+        file_name = (upload.filename or "unnamed")[:200]
+        page, state = page_context("spend")
+        if not state.tenant_id:
+            raise HTTPException(status_code=404)
+        try:
+            with engine.begin() as conn:
+                result = ingest(
+                    conn, tenant_id=state.tenant_id, source=source, file_name=file_name,
+                    data=data, actor=UI_ACTOR, clock=clock, rng=token_rng,
+                )  # fmt: skip
+                record_heartbeat(conn, "data_sources", clock)
+                findings = reconcile.uncontrolled_projects(conn, state.tenant_id)
+        except Quarantine as bad:
+            failed = BatchResult(uuid7(clock, token_rng), "QUARANTINED", reasons=bad.reasons)
+            with engine.begin() as conn:
+                record_batch(
+                    conn, state.tenant_id, source if source in SOURCES else "unknown",
+                    file_name, data, failed, UI_ACTOR, clock,
+                )  # fmt: skip
+            reporter.report(
+                "INGEST_QUARANTINED",
+                f"A billing file was refused and nothing from it was loaded ({len(bad.reasons)} "
+                "reasons). See the ingestion history on the Spend page.",
+            )
+            page, state = page_context("spend")
+            return render("spend.html", status_code=422, page=page, state=state,
+                          upload_result=failed, **spend_context(state, None))  # fmt: skip
+        if findings and result.rows_new + result.rows_revised:
+            reporter.report(
+                "UNCONTROLLED_SPEND",
+                f"The provider reports more usage than the gateway recorded for {len(findings)} "
+                "project(s). See the Reconciliation page.",
+                dedupe_s=60,
+            )
+        return RedirectResponse("/spend#history-title", status_code=303)
+
+    @app.post("/spend/assign")
+    async def spend_assign(request: Request):
+        """Assign one billing record to a project by hand (FR-03, confidence MANUAL)."""
+        form = await read_form(request)
+        state = load_state()
+        try:
+            record_id, project_id = (
+                uuid.UUID(form.get("record_id", "")),
+                uuid.UUID(form.get("project_id", "")),
+            )
+        except ValueError:
+            raise HTTPException(status_code=404) from None
+        reason = " ".join(form.get("reason", "").split())
+        if not state.tenant_id or not 10 <= len(reason) <= 300:
+            raise HTTPException(status_code=422)
+        n = normalized_cost_records
+        with engine.begin() as conn:
+            record = conn.execute(
+                select(n.c.source, n.c.record_key).where(
+                    n.c.id == record_id, n.c.tenant_id == state.tenant_id, n.c.is_current
+                )
+            ).one_or_none()
+            known = conn.execute(
+                select(projects.c.id).where(
+                    projects.c.id == project_id, projects.c.tenant_id == state.tenant_id
+                )
+            ).one_or_none()
+            if record is None or known is None:
+                raise HTTPException(status_code=404)
+            stmt = pg_insert(manual_allocations).values(
+                tenant_id=state.tenant_id, source=record.source, record_key=record.record_key,
+                project_id=project_id, actor=UI_ACTOR, reason=reason, assigned_at=clock.now(),
+            )  # fmt: skip
+            conn.execute(
+                stmt.on_conflict_do_update(
+                    index_elements=["tenant_id", "source", "record_key"],
+                    set_={"project_id": project_id, "actor": UI_ACTOR, "reason": reason,
+                          "assigned_at": clock.now()},
+                )
+            )  # fmt: skip
+            reallocate(conn, state.tenant_id, [record_id], clock)
+        return RedirectResponse("/spend#queue-title", status_code=303)
 
     # --- Fail-open: status for the banner, report, acknowledgement (UX-7) -----------
 

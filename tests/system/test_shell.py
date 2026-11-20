@@ -9,6 +9,7 @@ from tests.system.conftest import ALL_PATHS
 
 NAV = [
     "Overview",
+    "Spend",
     "Budgets",
     "Gateway",
     "Approvals",
@@ -45,7 +46,8 @@ def test_unbuilt_sections_say_which_phase_and_requirement(ui, page):
     rows = ui.soup(page.path).select(".roadmap li")
     assert len(rows) == len(page.sections)
     for row, section in zip(rows, page.sections, strict=True):
-        assert f"Coming in phase {section.phase}" in row.get_text()
+        expected = f"Coming in phase {section.phase}" if section.phase else "Not in the MVP phases"
+        assert expected in row.get_text()
         reqs = [c.get_text() for c in row.select("code")]
         assert reqs == list(section.reqs)
         assert all(re.fullmatch(r"(FR|UX|SEC)-\d{1,2}", r) for r in reqs)
