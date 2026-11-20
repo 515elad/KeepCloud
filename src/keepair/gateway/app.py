@@ -13,7 +13,7 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, PlainTextResponse
-from sqlalchemy import Engine, select
+from sqlalchemy import Engine
 
 from keepair import __version__
 from keepair.clock import Clock, SystemClock, to_iso
@@ -31,7 +31,7 @@ from keepair.gateway.spool import Caps, Spool, load_key
 from keepair.ids import uuid7
 from keepair.metrics import Metrics
 from keepair.rng import Rng, system_rng
-from keepair.schema import app_meta
+from keepair.startup import DemoDataInProduction, refuse_test_material
 
 # method, path template, billable (SEC-03). Anything not listed is refused.
 ALLOWED_PATHS = (
@@ -43,21 +43,6 @@ ALLOWED_PATHS = (
 )
 # Demo mode only, never in production: lets the demo console simulate a ledger outage.
 DEMO_PATHS = (("POST", "/demo/ledger-fault", False),)
-
-
-class DemoDataInProduction(RuntimeError):
-    """Demo data found in a production database (SEC-23)."""
-
-
-def refuse_test_material(engine: Engine, settings: Settings) -> None:
-    if settings.env != "prod":
-        return
-    with engine.connect() as conn:
-        demo = conn.execute(select(app_meta.c.value).where(app_meta.c.key == "demo")).scalar()
-    if demo == "true":
-        raise DemoDataInProduction(
-            "This database holds demo data and demo credentials. Refusing to start in production."
-        )
 
 
 def create_gateway_app(
@@ -191,3 +176,6 @@ def create_gateway_app(
         return JSONResponse(error_body("PATH_NOT_ALLOWED", rid), status_code=404)
 
     return app
+
+
+__all__ = ["DemoDataInProduction", "create_gateway_app", "refuse_test_material"]

@@ -153,16 +153,24 @@ def test_refused_block_changes_nothing(engine, subject_type, subject_id, reason,
 
 
 @pytest.mark.req("FR-18 (lifting a block requires two administrators)", "SD-03")
-def test_there_is_no_code_path_that_lifts_a_block_yet():
-    """Until the two-person flow exists (phase 5), nothing may set a status back to ALLOWED."""
+def test_a_block_can_only_be_lifted_through_the_two_person_approval():
+    """Phase 5 added ``registry.lift_block``. Its only caller is the approval that a second
+    administrator gives (keepair.approvals); no route and no other module calls it."""
     import keepair.registry as registry
     from keepair.config import REPO_ROOT
 
-    assert not [
+    setters = [
         n
         for n in dir(registry)
         if "lift" in n.lower() or "unblock" in n.lower() or "allow" in n.lower()
     ]
+    assert setters == ["lift_block"]
+    callers = [
+        p.name
+        for p in (REPO_ROOT / "src" / "keepair").rglob("*.py")
+        if p.name != "registry.py" and "lift_block(" in p.read_text()
+    ]
+    assert callers == ["approvals.py"]
 
     # From phase 2 the ledger updates budgets and reservations. The rule is about the
     # registry: only registry.py may update the vendor or model tables.

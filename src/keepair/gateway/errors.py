@@ -27,6 +27,7 @@ CODES: dict[str, tuple[int, str]] = {
     "UNKNOWN_MODEL": (403, "keepair_policy_denied"),
     "VENDOR_ROUTE_MISMATCH": (403, "keepair_policy_denied"),
     "SNAPSHOT_STALE": (403, "keepair_policy_denied"),
+    "KILL_SWITCH": (403, "keepair_policy_denied"),
     "BUDGET_EXHAUSTED": (403, "keepair_policy_denied"),
     "NO_BUDGET": (403, "keepair_policy_denied"),
     "FX_RATE_MISSING": (403, "keepair_policy_denied"),

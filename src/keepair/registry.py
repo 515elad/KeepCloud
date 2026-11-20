@@ -190,7 +190,7 @@ def add_block(
     reason: str,
     clock: Clock,
 ) -> None:
-    """Add a block. One step, any administrator (FR-18). Lifting is a separate, two-person flow."""
+    """Add a block. One step, any administrator (FR-18). Lifting is ``lift_block``, two people."""
     table = {"vendor": vendors, "model": models}.get(subject_type)
     if table is None:
         raise RegistryError("Unknown registry item type.")
@@ -217,6 +217,64 @@ def add_block(
             subject_id=subject_id,
             before_status=Status.ALLOWED.value,
             after_status=Status.BLOCKED.value,
+            actor=actor,
+            reason=reason,
+            changed_at=now,
+        )
+    )
+
+
+def subject_status(
+    conn: Connection, tenant_id: uuid.UUID, subject_type: str, subject_id: str
+) -> Status | None:
+    table = {"vendor": vendors, "model": models}.get(subject_type)
+    if table is None:
+        return None
+    status = conn.execute(
+        select(table.c.status).where(table.c.tenant_id == tenant_id, table.c.id == subject_id)
+    ).scalar_one_or_none()
+    return Status(status) if status else None
+
+
+def lift_block(
+    conn: Connection,
+    tenant_id: uuid.UUID,
+    subject_type: str,
+    subject_id: str,
+    actor: str,
+    reason: str,
+    clock: Clock,
+) -> None:
+    """Lift a block. Called only when a second administrator has approved (SEC-15).
+
+    ``actor`` names both people. Lifting a model's block does not allow the model
+    while its vendor is blocked: the vendor block still overrides.
+    """
+    table = {"vendor": vendors, "model": models}.get(subject_type)
+    if table is None:
+        raise RegistryError("Unknown registry item type.")
+    row = conn.execute(
+        select(table.c.status)
+        .where(table.c.tenant_id == tenant_id, table.c.id == subject_id)
+        .with_for_update()
+    ).one_or_none()
+    if row is None:
+        raise RegistryError("This registry item does not exist.")
+    if row.status != Status.BLOCKED:
+        raise RegistryError("This item is not blocked any more.")
+    now = clock.now()
+    conn.execute(
+        update(table)
+        .where(table.c.tenant_id == tenant_id, table.c.id == subject_id)
+        .values(status=Status.ALLOWED.value, updated_at=now, version=table.c.version + 1)
+    )
+    conn.execute(
+        insert(registry_changes).values(
+            tenant_id=tenant_id,
+            subject_type=subject_type,
+            subject_id=subject_id,
+            before_status=Status.BLOCKED.value,
+            after_status=Status.ALLOWED.value,
             actor=actor,
             reason=reason,
             changed_at=now,

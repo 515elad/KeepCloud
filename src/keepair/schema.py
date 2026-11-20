@@ -1,7 +1,4 @@
-"""SQLAlchemy Core table definitions (phase 0: foundation tables only).
-
-The business tables in PRD v1.4 Section 2.5 arrive with their phases.
-"""
+"""SQLAlchemy Core table definitions. Each phase added its tables below."""
 
 from __future__ import annotations
 
@@ -61,8 +58,8 @@ app_meta = Table(
 )
 
 # --- Phase 1: tenancy, hierarchy, budgets and registry -----------------------
-# Every tenant-owned table carries tenant_id (SEC-16). Row-level security is
-# switched on with sign-in in phase 5; until then there is one tenant.
+# Every tenant-owned table carries tenant_id (SEC-16). Queries filter by it.
+# Database row-level security is not built: the MVP runs one tenant.
 
 tenants = Table(
     "tenants",
@@ -111,7 +108,7 @@ budgets = Table(
     Column("mode", Text, nullable=False, server_default="INDEPENDENT"),
     Column("policy", Text, nullable=False),
     Column("fail_mode", Text, nullable=False),
-    Column("owner_user_id", Uuid),
+    Column("owner_user_id", Uuid, ForeignKey("users.id", name="budgets_owner_fkey")),
     Column("committed_micros", BigInteger, nullable=False, server_default=text("0")),
     Column("reserved_micros", BigInteger, nullable=False, server_default=text("0")),
     Column("version", BigInteger, nullable=False, server_default=text("0")),
@@ -303,8 +300,10 @@ reservations = Table(
     Column("dispatched_at", DateTime(timezone=True)),
     Column("settled_at", DateTime(timezone=True)),
     Column("usage_known", Boolean, nullable=False, server_default=text("true")),
+    # SHA-256 of the canonical request (phase 5). The body itself is never stored (D-07).
+    Column("request_hash", LargeBinary),
     CheckConstraint(
-        "state in ('HELD','RESERVED','SETTLED','RELEASED','EXPIRED','UNKNOWN')",
+        "state in ('HELD','APPROVED','RESERVED','SETTLED','RELEASED','EXPIRED','UNKNOWN')",
         name="reservations_state_check",
     ),
     CheckConstraint("reserved_micros >= 0", name="reservations_amount_check"),
@@ -313,6 +312,12 @@ reservations = Table(
         "credential_id",
         "state",
         postgresql_where=text("state in ('RESERVED','HELD')"),
+    ),
+    Index(
+        "reservations_hold_idx",
+        "agent_id",
+        "request_hash",
+        postgresql_where=text("state in ('HELD','APPROVED')"),
     ),
 )
 
@@ -541,4 +546,140 @@ allocation_facts = Table(
         name="allocation_facts_shape_check",
     ),
     Index("allocation_facts_current_idx", "tenant_id", "is_current"),
+)
+
+# --- Phase 5: users, sessions, approvals, kill switch, audit record -------------
+# Local accounts (FR-13, FR-17, D-06). The password is stored as a salted scrypt
+# hash. The TOTP secret must be readable to check a code, so it is stored
+# encrypted (AES-256-GCM) under a key that is not in the database.
+users = Table(
+    "users",
+    metadata,
+    Column("id", Uuid, primary_key=True),
+    Column("tenant_id", Uuid, ForeignKey("tenants.id"), nullable=False),
+    Column("username", Text, nullable=False),
+    Column("display_name", Text, nullable=False),
+    Column("role", Text, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("password_hash", Text, nullable=False),
+    Column("totp_secret_enc", LargeBinary, nullable=False),
+    Column("totp_last_step", BigInteger, nullable=False, server_default=text("0")),
+    Column("failed_attempts", Integer, nullable=False, server_default=text("0")),
+    Column("locked_until", DateTime(timezone=True)),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("created_by", Text, nullable=False),
+    UniqueConstraint("tenant_id", "username", name="users_username_key"),
+    CheckConstraint("role in ('ADMIN','FINANCE','ENGINEERING','AUDITOR')", name="users_role_check"),
+    CheckConstraint("status in ('ACTIVE','DISABLED')", name="users_status_check"),
+    CheckConstraint("username ~ '^[a-z][a-z0-9._-]{2,39}$'", name="users_username_check"),
+)
+
+# Only the SHA-256 of the session token is stored, as for gateway tokens.
+sessions = Table(
+    "sessions",
+    metadata,
+    Column("token_hash", LargeBinary, primary_key=True),
+    Column("user_id", Uuid, ForeignKey("users.id"), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("last_seen_at", DateTime(timezone=True), nullable=False),
+    Column("mfa_verified", Boolean, nullable=False),
+    CheckConstraint("octet_length(token_hash) = 32", name="sessions_hash_check"),
+)
+
+# Decisions by people (FR-11): on a held request, or on a two-person action (SEC-15).
+approvals = Table(
+    "approvals",
+    metadata,
+    Column("id", Uuid, primary_key=True),
+    Column("tenant_id", Uuid, ForeignKey("tenants.id"), nullable=False),
+    Column("kind", Text, nullable=False),
+    Column("subject_type", Text, nullable=False),
+    Column("subject_id", Text, nullable=False),
+    Column("summary", Text, nullable=False),
+    Column("payload", JSONB, nullable=False),
+    Column("requested_by", Uuid, ForeignKey("users.id")),
+    Column("requested_by_name", Text, nullable=False),
+    Column("requested_at", DateTime(timezone=True), nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("decision", Text),
+    Column("decided_by", Uuid, ForeignKey("users.id")),
+    Column("decided_by_name", Text),
+    Column("decided_at", DateTime(timezone=True)),
+    CheckConstraint(
+        "kind in ('HELD_REQUEST','BLOCK_LIFT','KILL_SWITCH_OFF','OWNER_CHANGE','POLICY_CHANGE')",
+        name="approvals_kind_check",
+    ),
+    CheckConstraint(
+        "decision is null or decision in ('APPROVED','REJECTED','EXPIRED','CANCELLED')",
+        name="approvals_decision_check",
+    ),
+    # Nobody decides their own request (SEC-15). Cancelling one's own request is allowed.
+    CheckConstraint(
+        "decided_by is null or requested_by is null or decided_by <> requested_by "
+        "or decision = 'CANCELLED'",
+        name="approvals_two_person_check",
+    ),
+    Index("approvals_pending_idx", "tenant_id", postgresql_where=text("decision is null")),
+)
+
+kill_switches = Table(
+    "kill_switches",
+    metadata,
+    Column("id", Uuid, primary_key=True),
+    Column("tenant_id", Uuid, ForeignKey("tenants.id"), nullable=False),
+    Column("scope_type", Text, nullable=False),
+    Column("scope_id", Text, nullable=False),  # '' for GLOBAL, vendor id, or project id
+    Column("scope_name", Text, nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("activated_by", Uuid, ForeignKey("users.id"), nullable=False),
+    Column("activated_by_name", Text, nullable=False),
+    Column("activated_at", DateTime(timezone=True), nullable=False),
+    Column("deactivated_at", DateTime(timezone=True)),
+    Column("deactivated_by_name", Text),
+    CheckConstraint(
+        "scope_type in ('GLOBAL','VENDOR','PROJECT')", name="kill_switches_scope_check"
+    ),
+    Index(
+        "kill_switches_active_key",
+        "tenant_id",
+        "scope_type",
+        "scope_id",
+        unique=True,
+        postgresql_where=text("deactivated_at is null"),
+    ),
+)
+
+# Append-only record of administrative actions (FR-12, SEC-31, SEC-32).
+# row_hash = SHA-256(prev_hash || canonical(row)). The application role may only
+# SELECT and INSERT here; triggers refuse UPDATE and DELETE.
+audit_log = Table(
+    "audit_log",
+    metadata,
+    Column("seq", BigInteger, primary_key=True, autoincrement=False),
+    Column("tenant_id", Uuid),
+    Column("occurred_at", DateTime(timezone=True), nullable=False),
+    Column("actor", Text, nullable=False),
+    Column("actor_id", Uuid),
+    Column("action", Text, nullable=False),
+    Column("subject_type", Text, nullable=False),
+    Column("subject_id", Text, nullable=False),
+    Column("before", JSONB),
+    Column("after", JSONB),
+    Column("reason", Text),
+    Column("prev_hash", LargeBinary, nullable=False),
+    Column("row_hash", LargeBinary, nullable=False),
+    CheckConstraint(
+        "octet_length(prev_hash) = 32 and octet_length(row_hash) = 32", name="audit_log_hash_check"
+    ),
+)
+
+# The newest link of the chain. One row. Locked while a record is appended.
+audit_head = Table(
+    "audit_head",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=False),
+    Column("seq", BigInteger, nullable=False),
+    Column("row_hash", LargeBinary, nullable=False),
+    CheckConstraint("id = 1", name="audit_head_single_row_check"),
 )

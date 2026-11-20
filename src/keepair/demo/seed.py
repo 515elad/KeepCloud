@@ -15,12 +15,14 @@ from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import Connection, Engine, func, insert, select, text
 
+from keepair import audit, passwords, totp
 from keepair.clock import Clock, FixedClock, to_iso
 from keepair.config import Settings
-from keepair.db import make_engine
+from keepair.db import make_owner_engine
 from keepair.demo.tree import Node, demo_tree
 from keepair.demo.usage_plan import usage_plan
 from keepair.gateway.tokens import generate_token, hash_token
+from keepair.iam import DEV_MFA_KEY, SecretBox, load_mfa_key
 from keepair.ids import uuid7
 from keepair.money import MICRO_PER_UNIT
 from keepair.rng import DEMO_SEED, seeded_rng
@@ -28,6 +30,7 @@ from keepair.schema import (
     agents,
     allocation_rules,
     app_meta,
+    audit_head,
     budgets,
     fx_rates,
     gateway_credentials,
@@ -41,13 +44,52 @@ from keepair.schema import (
     tenants,
     unregistered_models,
     usage_events,
+    users,
     vendor_endpoints,
     vendors,
 )
 
 DEMO_CLOCK_AT = datetime(2026, 1, 15, 9, 0, 0, tzinfo=UTC)
-DEMO_ACTOR = "demo-admin"
+DEMO_ACTOR = "alice.admin"
 SEEDED_RESERVATION_EXPIRY = datetime(2099, 1, 1, tzinfo=UTC)
+
+# Demo accounts. Fictional people. The password is demo material, shown on the
+# sign-in page in demo mode; production refuses to start on demo data (SEC-23).
+DEMO_PASSWORD = "northwind-demo-2026"  # noqa: S105  # pragma: allowlist secret
+DEMO_USERS = (
+    # user name, display name, role
+    ("alice.admin", "Alice Okafor", "ADMIN"),
+    ("bob.admin", "Bob Lindqvist", "ADMIN"),
+    ("fiona.finance", "Fiona Marchetti", "FINANCE"),
+    ("omar.owner", "Omar Haddad", "ENGINEERING"),
+    ("ava.auditor", "Ava Kowalski", "AUDITOR"),
+)
+# Accountable owner per budget (FR-17). Scopes not listed are unowned.
+DEMO_OWNERS = {
+    "Northwind Labs": "fiona.finance",
+    "Engineering": "alice.admin",
+    "Platform": "omar.owner",
+    "Build Assistant": "omar.owner",
+    "Log Summarizer": "omar.owner",
+    "Agents": "fiona.finance",
+    "Research Agent": "omar.owner",
+    "Code Review Agent": "omar.owner",
+    "Customer Operations": "fiona.finance",
+    "Support Automation": "fiona.finance",
+    "Ticket Triage": "fiona.finance",
+    "Reply Drafts": "fiona.finance",
+    "Lead Scoring": "fiona.finance",
+    "Research Europe": "bob.admin",
+    "Language Models": "bob.admin",
+    "Translation": "bob.admin",
+    "Summaries EU": "bob.admin",
+    "Red Team": "bob.admin",
+}
+
+
+def demo_totp_secret(username: str, seed_value: int = DEMO_SEED) -> bytes:
+    """A demo user's TOTP secret, derived from the seed. Demo material only."""
+    return hashlib.sha256(f"{seed_value}:totp:{username}".encode()).digest()[: totp.SECRET_BYTES]
 
 
 def demo_clock() -> FixedClock:
@@ -115,6 +157,7 @@ def seed(
     clock: Clock,
     seed_value: int = DEMO_SEED,
     mock_provider_url: str = "http://mock-provider:8090",
+    mfa_key: bytes = DEV_MFA_KEY,
 ) -> None:
     rng = seeded_rng(seed_value)
     now = clock.now()
@@ -132,6 +175,29 @@ def seed(
             {"key": "tenant_id", "value": str(tenant_id)},
         ],
     )
+
+    # People first: a hard-limit budget needs an active owner (FR-17).
+    box = SecretBox(mfa_key)
+    user_ids: dict[str, uuid.UUID] = {}
+    conn.execute(insert(audit_head).values(id=1, seq=0, row_hash=audit.GENESIS))
+    joined = FixedClock(now - timedelta(days=40))
+    for username, display_name, role in DEMO_USERS:
+        user_id = uuid7(clock, rng)
+        user_ids[username] = user_id
+        conn.execute(
+            insert(users).values(
+                id=user_id, tenant_id=tenant_id, username=username, display_name=display_name,
+                role=role, status="ACTIVE",
+                password_hash=passwords.hash_password(DEMO_PASSWORD, passwords.new_salt(rng)),
+                totp_secret_enc=box.seal(demo_totp_secret(username, seed_value), user_id, rng),
+                created_at=joined.now(), created_by="seed",
+            )
+        )  # fmt: skip
+        audit.record(
+            conn, joined, tenant_id=tenant_id, actor="seed", action="user.created",
+            subject_type="user", subject_id=username,
+            after={"role": role, "display_name": display_name, "status": "ACTIVE"},
+        )  # fmt: skip
 
     org, terms = demo_tree()
     _roll_up(org)
@@ -183,6 +249,7 @@ def seed(
                 mode=node.mode,
                 policy=node.policy,
                 fail_mode="FAIL_CLOSED" if node.policy in ("HARD", "APPROVAL") else "FAIL_OPEN",
+                owner_user_id=user_ids.get(DEMO_OWNERS.get(node.name, "")),
                 committed_micros=node.committed * MICRO_PER_UNIT + node.extra_micros,
                 reserved_micros=node.reserved * MICRO_PER_UNIT,
             )
@@ -290,6 +357,16 @@ def seed(
             },
         ],
     )  # fmt: skip
+    for subject_type, subject_id, reason, days in (
+        ("model", "vendor-b/model-2", "Model retired by the vendor.", 20),
+        ("model", "vendor-a/model-3", "Price change under review by finance.", 9),
+        ("vendor", "vendor-b", "Contract review in progress. Blocked until legal sign-off.", 2),
+    ):
+        audit.record(
+            conn, FixedClock(now - timedelta(days=days)), tenant_id=tenant_id, actor=DEMO_ACTOR,
+            action="registry.blocked", subject_type=subject_type, subject_id=subject_id,
+            before={"status": "ALLOWED"}, after={"status": "BLOCKED"}, reason=reason,
+        )  # fmt: skip
     conn.execute(
         insert(vendor_endpoints),
         [
@@ -362,12 +439,15 @@ def seed(
 
 def run(engine: Engine, settings: Settings) -> int:
     with engine.begin() as conn:
-        seed(conn, demo_clock(), mock_provider_url=settings.mock_provider_url)
+        seed(
+            conn, demo_clock(), mock_provider_url=settings.mock_provider_url,
+            mfa_key=load_mfa_key(settings.mfa_key, settings.env),
+        )  # fmt: skip
         return issue_demo_credentials(conn)
 
 
 if __name__ == "__main__":
     _settings = Settings()
-    _count = run(make_engine(_settings), _settings)
+    _count = run(make_owner_engine(_settings), _settings)
     print(f"Demo data loaded (seed {DEMO_SEED}, clock {to_iso(DEMO_CLOCK_AT)}).")
     print(f"{_count} demo gateway credentials issued, valid for 90 days.")

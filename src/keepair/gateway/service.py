@@ -14,8 +14,8 @@ Normative order. Each step is its own function with its own tests:
  10. settle                  ledger.settle
  11. respond
 
-Blocks and budget limits fail closed here. Fail-open for monitor and soft
-budgets arrives with the spool in phase 3.
+Blocks, the kill switch and hard limits fail closed. Monitor and soft budgets
+continue through the encrypted spool when the ledger is down (``_fail_open``).
 """
 
 from __future__ import annotations
@@ -43,6 +43,7 @@ from keepair.gateway.parse import canonical_hash, parse_chat_request, provider_b
 from keepair.gateway.snapshot import SnapshotCache
 from keepair.gateway.spool import Spool, SpoolError, SpoolFull
 from keepair.ids import uuid7
+from keepair.killswitch import affects
 from keepair.metrics import Metrics
 from keepair.registry import decide_block, normalize
 from keepair.rng import Rng
@@ -184,13 +185,16 @@ class Gateway:
             if self.spool.has_key(str(principal.agent_id), key):
                 # Sent once already during this outage; its result is not stored.
                 raise GatewayError("IDEMPOTENCY_IN_FLIGHT", headers={"Retry-After": "30"}) from None
-        if prior is not None:
+        request_hash = canonical_hash(document)
+        if prior is not None and not (
+            prior.status == 202 and self._approved_meanwhile(principal, request_hash)
+        ):
             prior.headers["X-KeepAir-Idempotent-Replay"] = "true"
             return GatewayResponse(prior.status, prior.body, prior.headers)
 
         try:
             response = self._decide_and_run(
-                request_id, principal, request, document, route_vendor, key
+                request_id, principal, request, document, route_vendor, key, request_hash
             )
         except GatewayError as err:
             response = self._refuse(request_id, principal, request.model, err)
@@ -215,6 +219,15 @@ class Gateway:
                 )
         return response
 
+    def _approved_meanwhile(self, principal: Principal, request_hash: bytes) -> bool:
+        """A stored 202 is not replayed once the hold was approved: the retry may run."""
+        try:
+            with self._ledger(write=False) as conn:
+                hold = ledger.find_hold(conn, principal.agent_id, request_hash)
+        except LedgerUnavailable:
+            return False
+        return hold is not None and hold.state == "APPROVED"
+
     def _forget_key(self, principal: Principal, key: str) -> None:
         try:
             with self._ledger() as conn:
@@ -229,7 +242,8 @@ class Gateway:
 
     # ------------------------------------------------------------ steps 5-11
 
-    def _decide_and_run(self, request_id, principal, request, document, route_vendor, key):
+    def _decide_and_run(self, request_id, principal, request, document, route_vendor, key,
+                        request_hash):  # fmt: skip
         rid = str(request_id)
         # 5. Canonicalize and block check, on the snapshot. Never fails open.
         try:
@@ -243,6 +257,10 @@ class Gateway:
             )
             raise
         decision = decide_block(loaded.policy, request.model)
+        # Kill switch (FR-22): before the block reason and before any budget step, so it
+        # holds for approved resubmissions and while the ledger is down.
+        if affects(loaded.kill, principal.project_id, decision.vendor_id):
+            raise GatewayError("KILL_SWITCH")
         if not decision.allowed:
             raise GatewayError(decision.reason.value)
         if route_vendor is not None and normalize(route_vendor) != decision.vendor_id:
@@ -265,26 +283,40 @@ class Gateway:
         # 8. Reserve. The decision row is written in the same transaction.
         try:
             with self._ledger() as conn:
-                reserved = ledger.reserve(
-                    conn,
-                    clock=self.clock,
-                    rng=self.rng,
-                    tenant_id=principal.tenant_id,
-                    request_id=request_id,
-                    budget_id=principal.budget_id,
-                    cost_micros=cost,
-                    credential_id=principal.credential_id,
-                    agent_id=principal.agent_id,
-                    model_id=decision.model_id,
-                    price_version=est.price_version,
-                    fx_rate_micros=rate.rate_micros,
-                    limits=self.limits,
-                )
+                hold = ledger.find_hold(conn, principal.agent_id, request_hash)
+                resubmission = hold is not None and hold.state == "APPROVED"
+                if resubmission and ledger.activate_approved(
+                    conn, hold.id, request_id=request_id, ttl_s=self.limits.ttl_s
+                ):
+                    # FR-11, UX-D2: the one matching resubmission of an approved request.
+                    reserved = ledger.Reserved(hold.id, "RESERVED", tuple(hold.budget_path))
+                elif hold is not None and hold.state == "HELD":
+                    # Still waiting for a decision: the same hold, not a second one.
+                    reserved = ledger.Reserved(hold.id, "HELD", tuple(hold.budget_path))
+                else:
+                    resubmission = False
+                    reserved = ledger.reserve(
+                        conn,
+                        clock=self.clock,
+                        rng=self.rng,
+                        tenant_id=principal.tenant_id,
+                        request_id=request_id,
+                        budget_id=principal.budget_id,
+                        cost_micros=cost,
+                        credential_id=principal.credential_id,
+                        agent_id=principal.agent_id,
+                        model_id=decision.model_id,
+                        price_version=est.price_version,
+                        fx_rate_micros=rate.rate_micros,
+                        request_hash=request_hash,
+                        limits=self.limits,
+                    )
                 held = reserved.state == "HELD"
                 self._record(
                     conn, request_id, principal, request.model, decision.model_id,
                     outcome="HELD" if held else "ALLOWED",
-                    reason="APPROVAL_REQUIRED" if held else None,
+                    reason="APPROVAL_REQUIRED" if held
+                    else ("APPROVED_RESUBMISSION" if resubmission else None),
                     status=202 if held else 200,
                     budget_id=principal.budget_id if held else None,
                     reservation_id=reserved.reservation_id,
@@ -304,7 +336,7 @@ class Gateway:
             "X-KeepAir-Decision": reserved.state,
         }
         if held:
-            # D-07: the request body is not stored. Approval allows a resubmission (phase 5).
+            # D-07: the request body is not stored. Approval allows one matching resubmission.
             return GatewayResponse(202, error_body("APPROVAL_REQUIRED", rid), gateway_headers)
 
         # 9. Dispatch. The adapter refuses unless it can claim the reservation.

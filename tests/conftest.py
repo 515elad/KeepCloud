@@ -94,3 +94,17 @@ def unreachable_engine() -> Iterator[Engine]:
     )
     yield engine
     engine.dispose()
+
+
+@pytest.fixture
+def app_engine(database_url: str, engine: Engine) -> Iterator[Engine]:
+    """The same seeded database, connected as the restricted role the services use."""
+    from sqlalchemy.engine import make_url
+
+    url = make_url(database_url).set(
+        username="keepair_app",
+        password="keepair_app",  # noqa: S106  # pragma: allowlist secret
+    )
+    restricted = create_engine(url)
+    yield restricted
+    restricted.dispose()

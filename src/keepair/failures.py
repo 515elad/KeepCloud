@@ -47,6 +47,9 @@ FAILURE_CODES: dict[str, tuple[str, str]] = {
     # Spend data (phase 4)
     "INGEST_QUARANTINED": ("SEV3", "data_sources"),
     "UNCONTROLLED_SPEND": ("SEV2", "gateway"),
+    # Accounts (phase 5) and the audit record (phase 6)
+    "ACCOUNT_LOCKED": ("SEV3", "app"),
+    "AUDIT_CHAIN_BROKEN": ("SEV1", "audit"),
 }
 
 _MEMORY_LIMIT = 100

@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     database_url: str = (
         "postgresql+psycopg://keepair:keepair@localhost:5432/keepair"  # pragma: allowlist secret
     )
+    # Migrations and the demo seed need the owner of the tables. The services run with
+    # ``database_url``, which in the demo stack is the restricted role keepair_app.
+    owner_database_url: str | None = None
     demo_mode: bool = True
     ui_dir: Path = REPO_ROOT / "ui"
     db_connect_timeout_s: int = 2
@@ -29,3 +32,5 @@ class Settings(BaseSettings):
     # Fail-open spool. The key is 32 bytes, base64. Required in production.
     spool_dir: Path = Path(tempfile.gettempdir()) / "keepair-spool"
     spool_key: str | None = None
+    # Key for the stored TOTP secrets: 32 bytes, base64. Required in production.
+    mfa_key: str | None = None

@@ -464,9 +464,10 @@ def test_approval_policy_holds_the_request_and_dispatches_nothing(gw):
 
 @pytest.mark.req("v1.5 FR-05 (reservation caps)", "SEC-12")
 def test_held_requests_are_capped_per_credential(gw):
-    statuses = [gw.chat("Research Agent").status_code for _ in range(22)]
+    # Different requests: an identical one would be the same hold, not a new one (phase 5).
+    statuses = [gw.chat("Research Agent", content=f"question {i}").status_code for i in range(22)]
     assert statuses == [202] * 20 + [429, 429]
-    limited = gw.chat("Research Agent")
+    limited = gw.chat("Research Agent", content="one more question")
     assert (
         limited.json()["error"]["code"] == "RATE_LIMITED" and limited.headers["retry-after"] == "30"
     )

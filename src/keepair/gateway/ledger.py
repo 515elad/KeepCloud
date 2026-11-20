@@ -22,7 +22,7 @@ from keepair.ids import uuid7
 from keepair.rng import Rng
 from keepair.schema import budgets, reservations
 
-OPEN_STATES = ("RESERVED", "HELD")
+OPEN_STATES = ("RESERVED", "HELD", "APPROVED")
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +104,7 @@ def reserve(
     model_id: str | None = None,
     price_version: int | None = None,
     fx_rate_micros: int | None = None,
+    request_hash: bytes | None = None,
     limits: Limits = DEFAULT_LIMITS,
 ) -> Reserved:
     path_ids = budget_path_ids(conn, tenant_id, budget_id)
@@ -117,7 +118,7 @@ def reserve(
                 select(reservations.c.state, func.count())
                 .where(
                     reservations.c.credential_id == credential_id,
-                    reservations.c.state.in_(OPEN_STATES),
+                    reservations.c.state.in_(("RESERVED", "HELD")),
                 )
                 .group_by(reservations.c.state)
             ).all()
@@ -158,6 +159,7 @@ def reserve(
             currency=own.currency,
             price_version=price_version,
             fx_rate_micros=fx_rate_micros,
+            request_hash=request_hash if hold else None,
             # Database clock: now() + ttl (SEC-35).
             expires_at=func.now() + func.make_interval(0, 0, 0, 0, 0, 0, ttl),
             created_at=clock.now(),
@@ -165,6 +167,47 @@ def reserve(
     )
     _apply(conn, path_ids, reserved_delta=cost_micros)
     return Reserved(reservation_id, state, tuple(path_ids), crossed)
+
+
+def find_hold(conn: Connection, agent_id: uuid.UUID, request_hash: bytes):
+    """A live hold for the same agent and the same request: approved first, oldest first.
+
+    The request body is never stored (D-07). A resubmission is recognized by the
+    SHA-256 of its canonical form.
+    """
+    r = reservations
+    return conn.execute(
+        select(r.c.id, r.c.state, r.c.budget_path)
+        .where(
+            r.c.agent_id == agent_id,
+            r.c.request_hash == request_hash,
+            r.c.state.in_(("HELD", "APPROVED")),
+            r.c.expires_at > func.now(),
+        )
+        .order_by(r.c.state, r.c.created_at)  # 'APPROVED' sorts before 'HELD'
+        .limit(1)
+        .with_for_update()
+    ).one_or_none()
+
+
+def activate_approved(
+    conn: Connection, reservation_id: uuid.UUID, *, request_id: uuid.UUID, ttl_s: int
+) -> bool:
+    """Turn an approved hold into a live reservation for its one resubmission (UX-D2)."""
+    result = conn.execute(
+        update(reservations)
+        .where(
+            reservations.c.id == reservation_id,
+            reservations.c.state == "APPROVED",
+            reservations.c.expires_at > func.now(),
+        )
+        .values(
+            state="RESERVED",
+            request_id=request_id,
+            expires_at=func.now() + func.make_interval(0, 0, 0, 0, 0, 0, ttl_s),
+        )
+    )
+    return result.rowcount == 1
 
 
 def claim_for_dispatch(conn: Connection, reservation_id: uuid.UUID) -> bool:
@@ -271,12 +314,13 @@ def sweep_expired(conn: Connection, clock: Clock, batch: int = 200) -> list[Expi
     """Close reservations past their database-clock expiry.
 
     RESERVED: the request may have reached the provider, so it settles at the
-    reserved amount with usage unknown. HELD: nothing was sent, so it is released.
+    reserved amount with usage unknown. HELD or APPROVED: nothing was sent, so it is
+    released. An approval that was not used within its window ends here.
     """
     rows = conn.execute(
         text(
             "SELECT id, state, budget_id, reserved_micros FROM reservations "
-            "WHERE state IN ('RESERVED','HELD') AND expires_at < now() "
+            "WHERE state IN ('RESERVED','HELD','APPROVED') AND expires_at < now() "
             "ORDER BY id LIMIT :batch FOR UPDATE SKIP LOCKED"
         ),
         {"batch": batch},

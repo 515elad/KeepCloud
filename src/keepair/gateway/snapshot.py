@@ -20,6 +20,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from keepair.clock import Clock
 from keepair.gateway.errors import GatewayError
 from keepair.gateway.fx import Rate
+from keepair.killswitch import active_keys
 from keepair.money import MICRO_PER_UNIT
 from keepair.registry import PolicySnapshot, load_snapshot
 from keepair.schema import fx_rates, vendor_endpoints
@@ -34,6 +35,7 @@ class Loaded:
     endpoints: dict[str, str]
     built_at: datetime
     fx: tuple = ()  # (base, quote, effective_date, rate_micros), newest first
+    kill: frozenset = frozenset()  # (scope type, scope id) of every kill switch that is on
 
     def rate(self, base: str, quote: str, on) -> Rate | None:
         """The rate effective on the given date: the latest one not after it."""
@@ -66,7 +68,8 @@ def load_from_database(engine: Engine, tenant_id: uuid.UUID, clock: Clock) -> Lo
                 ).order_by(fx_rates.c.effective_date.desc())
             )
         )
-    return Loaded(policy, endpoints, clock.now(), fx)
+        kill = active_keys(conn, tenant_id)
+    return Loaded(policy, endpoints, clock.now(), fx, kill)
 
 
 class SnapshotCache:

@@ -263,7 +263,7 @@ def test_seeded_reserved_amounts_are_backed_by_reservations(gw):
     """Every budget's reserved counter equals the open reservations on its path."""
     rows = gw.rows(
         "SELECT b.id, b.reserved_micros, coalesce(sum(r.reserved_micros), 0) AS open "
-        "FROM budgets b LEFT JOIN reservations r ON b.id = ANY(r.budget_path) AND r.state IN ('RESERVED','HELD') "
+        "FROM budgets b LEFT JOIN reservations r ON b.id = ANY(r.budget_path) AND r.state IN ('RESERVED','HELD','APPROVED') "
         "GROUP BY b.id"
     )
     assert len(rows) == 22 and all(r.reserved_micros == r.open for r in rows)
@@ -271,7 +271,7 @@ def test_seeded_reserved_amounts_are_backed_by_reservations(gw):
     gw.chat("Research Agent")
     rows = gw.rows(
         "SELECT b.reserved_micros, coalesce(sum(r.reserved_micros), 0) AS open "
-        "FROM budgets b LEFT JOIN reservations r ON b.id = ANY(r.budget_path) AND r.state IN ('RESERVED','HELD') "
+        "FROM budgets b LEFT JOIN reservations r ON b.id = ANY(r.budget_path) AND r.state IN ('RESERVED','HELD','APPROVED') "
         "GROUP BY b.id"
     )
     assert all(r.reserved_micros == r.open for r in rows)
@@ -292,6 +292,13 @@ def test_customer_key_project_cannot_activate_hard_limit(gw):
     gw.execute(
         "UPDATE projects SET key_custody = 'CUSTOMER' WHERE name = 'Call Notes'"
     )  # monitor: fine
+    # Call Notes has no owner in the demo data. Give it one, so that the custody rule and
+    # not the owner rule (FR-17, phase 5) is what refuses the hard limit below.
+    gw.execute(
+        "UPDATE budgets SET owner_user_id = (SELECT id FROM users WHERE username = 'bob.admin') "
+        "WHERE id = :id",
+        id=gw.budget("Call Notes").id,
+    )
     for policy in ("HARD", "APPROVAL"):
         with pytest.raises(IntegrityError, match="customer-held key"):
             gw.execute(
