@@ -48,9 +48,14 @@ services:
       app:
         condition: service_healthy
       mock-provider:
-        condition: service_started
+        condition: service_healthy
     ports:
       - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
     read_only: true
     tmpfs:
       - /tmp
@@ -60,6 +65,11 @@ services:
     build: .
     command: ["uvicorn", "keepair.mockprovider.main:app", "--host", "0.0.0.0", "--port", "8090"]
     environment: *app-env
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8090/healthz')"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
     read_only: true
     tmpfs:
       - /tmp

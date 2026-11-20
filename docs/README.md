@@ -5,14 +5,12 @@
 Needs Docker. No account, API key or internet service is used.
 
 ```bash
-docker compose up --build
+./run.sh
 ```
 
-Open <http://localhost:8000>, then follow the demo script for the current phase. The gateway listens on <http://localhost:8080>. To send the scripted demo traffic:
+It builds and starts the stack, loads the demo data and sends the scripted demo traffic. Open <http://localhost:8000>, then follow the demo script for the current phase. The gateway listens on <http://localhost:8080>. `./run.sh help` lists the other commands (traffic, reset, stop, test).
 
-```bash
-docker compose run --rm demo-traffic
-```
+The demo scripts name the underlying `docker compose` commands step by step; `./run.sh` runs the same ones.
 
 | Phase | Demo script | Lifecycle record |
 |---|---|---|
@@ -35,10 +33,16 @@ docker compose run --rm demo-traffic
 ## Develop
 
 ```bash
+./run.sh test
+```
+
+This installs the pinned tools into `.venv` and runs lint, the secret scan and all tests (needs Docker for PostgreSQL 16, and `uv`). The single steps:
+
+```bash
 uv venv --python 3.12
 uv pip sync --require-hashes requirements-dev.lock
 uv pip install --no-deps -e .
-.venv/bin/pytest --cov          # needs Docker for PostgreSQL 16
+.venv/bin/pytest --cov
 .venv/bin/ruff check . && .venv/bin/ruff format --check .
 scripts/secret_scan.sh
 ```

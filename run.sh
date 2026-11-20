@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# KeepAir demo: one command to build, start and load everything.
+#
+#   ./run.sh            build, start, wait until ready, send the demo traffic
+#   ./run.sh start      the same
+#   ./run.sh traffic    send the 500 scripted demo requests again (as new requests)
+#   ./run.sh reset      reload the original demo data
+#   ./run.sh status     show the services
+#   ./run.sh logs       follow the logs
+#   ./run.sh stop       stop everything and delete the demo database
+#   ./run.sh test       install the developer tools and run lint, secret scan and all tests
+#
+# Options for start:  --no-traffic   do not send the demo traffic
+#                     --no-build     reuse images that are already built
+#
+# Needs Docker with the compose plugin. Nothing else. No account, key or
+# internet service is used: the "vendor" is a mock server in the same stack.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+UI_URL="http://localhost:8000"
+GATEWAY_URL="http://localhost:8080"
+
+say() { printf '\n==> %s\n' "$*"; }
+fail() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
+
+need_docker() {
+  command -v docker >/dev/null 2>&1 || fail "Docker is not installed. Install Docker Desktop (or Docker Engine) and run this again."
+  docker compose version >/dev/null 2>&1 || fail "The Docker compose plugin is missing. Update Docker and run this again."
+  docker info >/dev/null 2>&1 || fail "Docker is installed but not running. Start Docker and run this again."
+}
+
+send_traffic() {
+  say "Sending 500 scripted demo requests through the gateway (run $1)"
+  docker compose run --rm --no-deps demo-traffic python -m keepair.demo.traffic --run "$1"
+}
+
+start() {
+  local traffic=1 build="--build"
+  for arg in "$@"; do
+    case "$arg" in
+      --no-traffic) traffic=0 ;;
+      --no-build) build="--no-build" ;;
+      *) fail "Unknown option for start: $arg" ;;
+    esac
+  done
+  need_docker
+  say "Building and starting KeepAir (database, UI, gateway, mock vendor)"
+  docker compose up -d $build --wait
+  if [ "$traffic" = 1 ]; then send_traffic 1; fi
+  cat <<MSG
+
+KeepAir is running.
+
+  UI        $UI_URL            (start here)
+  Gateway   $GATEWAY_URL/v1/chat/completions
+  Demo script: docs/demo/phase-2.md
+
+  ./run.sh traffic   send the demo traffic again
+  ./run.sh reset     reload the original demo data
+  ./run.sh stop      stop everything
+MSG
+}
+
+case "${1:-start}" in
+  start) shift || true; start "$@" ;;
+  --no-traffic|--no-build) start "$@" ;;
+  traffic) need_docker; send_traffic "$(date +%s)" ;;
+  reset)
+    need_docker
+    say "Reloading the demo data"
+    docker compose restart app
+    docker compose up -d --no-build --wait app
+    echo "Done. Budgets, registry and credentials are back to the seeded state."
+    ;;
+  status) need_docker; docker compose ps ;;
+  logs) need_docker; docker compose logs -f ;;
+  stop)
+    need_docker
+    say "Stopping KeepAir and deleting the demo database"
+    docker compose --profile demo down -v --remove-orphans
+    ;;
+  test)
+    command -v uv >/dev/null 2>&1 || fail "The 'uv' tool is needed for this. Install it from https://docs.astral.sh/uv/ and run this again."
+    need_docker
+    say "Installing the pinned developer tools into .venv"
+    uv venv --python 3.12 --allow-existing -q
+    uv pip sync -q --require-hashes requirements-dev.lock
+    uv pip install -q --no-deps -e .
+    say "Lint";        .venv/bin/ruff check . && .venv/bin/ruff format --check .
+    say "Secret scan"; scripts/secret_scan.sh
+    say "Tests (starts a throwaway PostgreSQL 16 container)"
+    .venv/bin/pytest --cov
+    ;;
+  -h|--help|help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) fail "Unknown command: $1. Run ./run.sh help" ;;
+esac
