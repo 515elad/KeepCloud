@@ -12,4 +12,4 @@ from detect_secrets.plugins.base import RegexBasedDetector
 class KeepAirTokenDetector(RegexBasedDetector):
     secret_type = "KeepAir Gateway Token"  # noqa: S105  # pragma: allowlist secret
 
-    denylist = [re.compile(r"kair_[0-9A-Za-z]{43}_[0-9A-Za-z]{6}")]
+    denylist = (re.compile(r"kair_[0-9A-Za-z]{43}_[0-9A-Za-z]{6}"),)
