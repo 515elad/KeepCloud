@@ -1,8 +1,8 @@
 """Provider adapters (hard rule 6, SEC-01).
 
 An adapter sends nothing unless it can claim a live reservation in the
-database. Calling it directly, with no permit or with a made-up reservation
-ID, is refused. There is no pass-through mode.
+database or, in fail-open, an open record in the spool. Calling it directly,
+with no permit or with a made-up ID, is refused. There is no pass-through mode.
 
 The only adapter in the MVP speaks the OpenAI-compatible chat shape to the
 mock provider. No real provider is ever called.
@@ -18,6 +18,7 @@ import httpx
 from sqlalchemy import Engine
 
 from keepair.gateway import ledger
+from keepair.gateway.spool import Spool
 
 DEFAULT_TIMEOUT_S = 120.0
 # The path this adapter may call on a vendor host. Billable.
@@ -31,6 +32,13 @@ class NoReservation(Exception):
 @dataclass(frozen=True, slots=True)
 class DispatchPermit:
     reservation_id: uuid.UUID
+
+
+@dataclass(frozen=True, slots=True)
+class SpoolPermit:
+    """Fail-open: the request is recorded in the spool instead of the ledger."""
+
+    record_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,14 +65,17 @@ class MockVault:
 
 
 class ChatAdapter:
-    def __init__(self, engine: Engine, http: httpx.Client, vault: Vault) -> None:
+    def __init__(
+        self, engine: Engine, http: httpx.Client, vault: Vault, spool: Spool | None = None
+    ) -> None:
         self._engine = engine
         self._http = http
         self._vault = vault
+        self._spool = spool
 
     def dispatch(
         self,
-        permit: DispatchPermit,
+        permit: DispatchPermit | SpoolPermit,
         *,
         tenant_id: uuid.UUID,
         vendor_id: str,
@@ -72,11 +83,15 @@ class ChatAdapter:
         body: dict[str, Any],
         timeout_s: float = DEFAULT_TIMEOUT_S,
     ) -> ProviderResult:
-        if not isinstance(permit, DispatchPermit):
+        if isinstance(permit, SpoolPermit):
+            if self._spool is None or not self._spool.claim(permit.record_id):
+                raise NoReservation("no open spool record for this dispatch")
+        elif isinstance(permit, DispatchPermit):
+            with self._engine.begin() as conn:
+                if not ledger.claim_for_dispatch(conn, permit.reservation_id):
+                    raise NoReservation("no live reservation for this dispatch")
+        else:
             raise NoReservation("dispatch needs a permit from the gateway")
-        with self._engine.begin() as conn:
-            if not ledger.claim_for_dispatch(conn, permit.reservation_id):
-                raise NoReservation("no live reservation for this dispatch")
         # The key is read for this call only and is never logged or returned.
         key = self._vault.provider_key(tenant_id, vendor_id)
         response = self._http.post(

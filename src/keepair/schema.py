@@ -378,3 +378,32 @@ gateway_decisions = Table(
     ),
     Index("gateway_decisions_time_idx", "tenant_id", "occurred_at"),
 )
+
+# --- Phase 3: fail-open events ------------------------------------------------
+# One row per request that was sent without a budget check (PRD v1.4 Section 2.5).
+# The id is the spool record id, which makes replay idempotent.
+fail_events = Table(
+    "fail_events",
+    metadata,
+    Column("id", Uuid, primary_key=True),
+    Column("tenant_id", Uuid, ForeignKey("tenants.id"), nullable=False),
+    Column("occurred_at", DateTime(timezone=True), nullable=False),
+    Column("kind", Text, nullable=False),
+    Column("budget_id", Uuid, ForeignKey("budgets.id")),
+    Column("reservation_id", Uuid),
+    Column("agent", Text),
+    Column("project", Text),
+    Column("model_id", Text),
+    Column("amount_micros", BigInteger, nullable=False),
+    Column("currency", String(3), nullable=False),
+    Column("usage_known", Boolean, nullable=False),
+    Column("detail", JSONB, nullable=False),
+    Column("replayed_at", DateTime(timezone=True), nullable=False),
+    Column("acknowledged_at", DateTime(timezone=True)),
+    Column("acknowledged_by", Text),
+    CheckConstraint(
+        "kind in ('FAIL_OPEN','FAIL_CLOSED','SNAPSHOT_STALE','RESERVATION_EXPIRED','UNCONTROLLED_SPEND')",
+        name="fail_events_kind_check",
+    ),
+    CheckConstraint("amount_micros >= 0", name="fail_events_amount_check"),
+)

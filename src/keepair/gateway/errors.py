@@ -30,11 +30,14 @@ CODES: dict[str, tuple[int, str]] = {
     "BUDGET_EXHAUSTED": (403, "keepair_policy_denied"),
     "NO_BUDGET": (403, "keepair_policy_denied"),
     "FX_RATE_MISSING": (403, "keepair_policy_denied"),
+    # the ledger is down and this budget does not allow sending without a check
+    "BUDGET_FAIL_CLOSED": (403, "keepair_policy_denied"),
     # held for approval
     "APPROVAL_REQUIRED": (202, "keepair_held"),
     # limits and availability
     "RATE_LIMITED": (429, "keepair_rate_limited"),
     "LEDGER_UNAVAILABLE": (503, "keepair_unavailable"),
+    "FAIL_OPEN_CAPACITY": (503, "keepair_unavailable"),
     "UPSTREAM_TIMEOUT": (504, "keepair_upstream_error"),
     "UPSTREAM_ERROR": (502, "keepair_upstream_error"),
 }

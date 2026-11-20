@@ -28,6 +28,10 @@ class Principal:
     project: str
     team: str
     budget_id: uuid.UUID | None
+    budget_currency: str | None = None
+    budget_path: tuple[uuid.UUID, ...] = ()
+    # True when every budget on the limit path is monitor or soft with fail mode FAIL_OPEN.
+    fail_open_eligible: bool = False
 
 
 def authenticate(conn: Connection, authorization: str | None) -> Principal:
@@ -53,23 +57,71 @@ def authenticate(conn: Connection, authorization: str | None) -> Principal:
     ).one_or_none()  # fmt: skip
     if row is None:
         raise GatewayError("AUTHENTICATION_FAILED")
-    budget_id = conn.execute(
-        select(budgets.c.id)
-        .where(
-            budgets.c.tenant_id == row.tenant_id,
-            budgets.c.scope_type == "PROJECT",
-            budgets.c.scope_id == row.project_id,
+    t_b = budgets
+    rows = {
+        r.id: r
+        for r in conn.execute(
+            select(
+                t_b.c.id, t_b.c.parent_id, t_b.c.mode, t_b.c.policy, t_b.c.fail_mode,
+                t_b.c.currency, t_b.c.scope_type, t_b.c.scope_id, t_b.c.period_start,
+            ).where(t_b.c.tenant_id == row.tenant_id)
         )
-        .order_by(budgets.c.period_start.desc())
-        .limit(1)
-    ).scalar_one_or_none()
-    return Principal(
-        row.id,
-        row.tenant_id,
-        row.agent_id,
-        row.agent,
-        row.project_id,
-        row.project,
-        row.team,
-        budget_id,
+    }  # fmt: skip
+    own = max(
+        (r for r in rows.values() if r.scope_type == "PROJECT" and r.scope_id == row.project_id),
+        key=lambda r: r.period_start,
+        default=None,
     )
+    path: list = []
+    current = own
+    while current is not None and current.id not in {r.id for r in path}:
+        path.append(current)
+        current = rows.get(current.parent_id) if current.mode == "SUBDIVISION" else None
+    eligible = bool(path) and all(
+        r.policy in ("MONITOR", "SOFT") and r.fail_mode == "FAIL_OPEN" for r in path
+    )
+    return Principal(
+        row.id, row.tenant_id, row.agent_id, row.agent, row.project_id, row.project, row.team,
+        own.id if own else None,
+        own.currency if own else None,
+        tuple(r.id for r in path),
+        eligible,
+    )  # fmt: skip
+
+
+CACHE_TTL_S = 30
+
+
+class PrincipalCache:
+    """Last successful lookups, used only while the database cannot be reached.
+
+    When the database is up, every request is checked there, so revocation is
+    immediate. During an outage a credential seen in the last 30 seconds is
+    still accepted (SEC-12: revoked within 30 s); anything else is refused.
+    """
+
+    def __init__(self, clock) -> None:
+        self._clock = clock
+        self._entries: dict[bytes, tuple[Principal, object]] = {}
+
+    @staticmethod
+    def malformed(authorization: str | None) -> bool:
+        scheme, _, token = (authorization or "").partition(" ")
+        return scheme.lower() != "bearer" or not is_well_formed(token.strip())
+
+    def put(self, token_hash: bytes, principal: Principal) -> None:
+        self._entries[token_hash] = (principal, self._clock.now())
+
+    def get(self, authorization: str | None) -> Principal | None:
+        scheme, _, token = (authorization or "").partition(" ")
+        if scheme.lower() != "bearer" or not is_well_formed(token.strip()):
+            return None
+        entry = self._entries.get(hash_token(token.strip()))
+        if entry is None or (self._clock.now() - entry[1]).total_seconds() > CACHE_TTL_S:
+            return None
+        return entry[0]
+
+
+def token_hash_of(authorization: str | None) -> bytes | None:
+    scheme, _, token = (authorization or "").partition(" ")
+    return hash_token(token.strip()) if scheme.lower() == "bearer" else None

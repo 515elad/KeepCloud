@@ -38,6 +38,12 @@ FAILURE_CODES: dict[str, tuple[str, str]] = {
     "PROVIDER_ERROR": ("SEV3", "gateway"),
     "SOFT_LIMIT_EXCEEDED": ("SEV3", "ledger"),
     "DECISION_RECORD_FAILED": ("SEV2", "gateway"),
+    # Fail-open (phase 3)
+    "FAIL_OPEN": ("SEV3", "ledger"),
+    "FAIL_OPEN_PROLONGED": ("SEV2", "ledger"),
+    "SPOOL_FULL": ("SEV2", "gateway"),
+    "SPOOL_WRITE_FAILED": ("SEV2", "gateway"),
+    "SPOOL_CORRUPT": ("SEV2", "gateway"),
 }
 
 _MEMORY_LIMIT = 100

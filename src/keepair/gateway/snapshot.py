@@ -19,8 +19,10 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from keepair.clock import Clock
 from keepair.gateway.errors import GatewayError
+from keepair.gateway.fx import Rate
+from keepair.money import MICRO_PER_UNIT
 from keepair.registry import PolicySnapshot, load_snapshot
-from keepair.schema import vendor_endpoints
+from keepair.schema import fx_rates, vendor_endpoints
 
 REFRESH_AFTER_S = 5
 STALE_AFTER_S = 30
@@ -31,6 +33,16 @@ class Loaded:
     policy: PolicySnapshot
     endpoints: dict[str, str]
     built_at: datetime
+    fx: tuple = ()  # (base, quote, effective_date, rate_micros), newest first
+
+    def rate(self, base: str, quote: str, on) -> Rate | None:
+        """The rate effective on the given date: the latest one not after it."""
+        if base == quote:
+            return Rate(base, quote, MICRO_PER_UNIT, None)
+        for b, q, effective, rate_micros in self.fx:
+            if b == base and q == quote and effective <= on:
+                return Rate(base, quote, rate_micros, effective)
+        return None
 
 
 def load_from_database(engine: Engine, tenant_id: uuid.UUID, clock: Clock) -> Loaded:
@@ -43,7 +55,18 @@ def load_from_database(engine: Engine, tenant_id: uuid.UUID, clock: Clock) -> Lo
                 )
             ).all()
         )
-    return Loaded(policy, endpoints, clock.now())
+        fx = tuple(
+            tuple(r)
+            for r in conn.execute(
+                select(
+                    fx_rates.c.base,
+                    fx_rates.c.quote,
+                    fx_rates.c.effective_date,
+                    fx_rates.c.rate_micros,
+                ).order_by(fx_rates.c.effective_date.desc())
+            )
+        )
+    return Loaded(policy, endpoints, clock.now(), fx)
 
 
 class SnapshotCache:

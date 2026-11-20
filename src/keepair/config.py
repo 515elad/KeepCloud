@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 from typing import Literal
 
@@ -25,3 +26,6 @@ class Settings(BaseSettings):
     gateway_url: str = "http://localhost:8080"
     mock_provider_url: str = "http://localhost:8090"
     fixtures_dir: Path = REPO_ROOT / "tests" / "fixtures" / "providers"
+    # Fail-open spool. The key is 32 bytes, base64. Required in production.
+    spool_dir: Path = Path(tempfile.gettempdir()) / "keepair-spool"
+    spool_key: str | None = None

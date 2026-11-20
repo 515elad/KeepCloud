@@ -2,6 +2,7 @@
 
 import json
 import uuid
+from datetime import timedelta
 
 import httpx
 import pytest
@@ -480,6 +481,7 @@ def test_eur_budget_is_charged_in_eur_at_the_stored_rate(gw):
     )
     assert tuple(res) == ("EUR", 920_000)
     gw.execute("DELETE FROM fx_rates")
+    gw.clock.advance(timedelta(seconds=6))  # rates travel with the policy snapshot (5 s)
     missing = gw.chat("Translation", "model-1")
     assert missing.status_code == 403 and missing.json()["error"]["code"] == "FX_RATE_MISSING"
     assert gw.chat("Build Assistant").status_code == 200  # USD budgets need no rate

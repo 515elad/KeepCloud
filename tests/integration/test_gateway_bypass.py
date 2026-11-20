@@ -96,7 +96,11 @@ def test_no_passthrough_mode_exists():
 
     source = inspect.getsource(service) + inspect.getsource(ChatAdapter)
     assert "passthrough" not in source.lower() and "pass_through" not in source.lower()
-    assert source.count("self.adapter.dispatch(") == 1  # one call site, after reserve
+    # Two call sites since phase 3: after a ledger reservation, and in fail-open after the
+    # spool record is written. Each hands the adapter a permit that it must be able to claim.
+    assert source.count("self.adapter.dispatch(") == 2
+    assert source.count("DispatchPermit(reserved.reservation_id)") == 1
+    assert source.count("SpoolPermit(rid)") == 1
 
 
 @pytest.mark.req("SEC-03", "B-n2", "S-02")
@@ -129,6 +133,7 @@ def test_allowlist_classifies_every_path_as_billable_or_not():
         ("POST", "/v1/vendors/{vendor}/chat/completions"): True,
         ("GET", "/healthz"): False,
         ("GET", "/metrics"): False,
+        ("GET", "/status"): False,
     }
 
 
@@ -230,29 +235,43 @@ def test_instance_with_no_snapshot_denies(settings, engine, monkeypatch):
     assert err.value.code == "SNAPSHOT_STALE"
 
 
-@pytest.mark.req("SEC-06 (blocks and hard limits fail closed)", "D-01")
-def test_ledger_outage_refuses_every_request(settings, unreachable_engine):
+@pytest.mark.req("SEC-06 (fail closed when nothing can be verified)", "D-01")
+def test_database_outage_with_unknown_credentials_refuses_every_request(
+    settings, unreachable_engine
+):
+    """No database and no recent sight of the credential: the gateway cannot know who is
+    asking or which budget applies, so it refuses, whatever the budget's policy."""
     gw = make_gateway(settings, unreachable_engine)
-    for project in ("Build Assistant", "Call Notes"):  # hard and monitor alike in phase 2
+    for project in ("Build Assistant", "Call Notes"):
         response = gw.chat(project)
         assert (
             response.status_code == 503 and response.json()["error"]["code"] == "LEDGER_UNAVAILABLE"
         )
     assert not gw.provider.called
     assert gw.metrics.value("keepair_failures_total", code="DATABASE_UNREACHABLE") == 2
+    assert gw.app.state.spool.stats().waiting == 0
 
 
 @pytest.mark.req("SEC-23", "B-n10")
-def test_test_secret_refused_in_prod(settings, engine):
+def test_test_secret_refused_in_prod(settings, engine, tmp_path):
+    import base64
+
+    prod = settings.model_copy(
+        update={
+            "env": "prod",
+            "spool_dir": tmp_path,
+            "spool_key": base64.b64encode(b"k" * 32).decode(),
+        }
+    )
     with pytest.raises(DemoDataInProduction, match="demo data"):
-        create_gateway_app(
-            settings.model_copy(update={"env": "prod"}), engine=engine, run_maintenance=False
-        )
+        create_gateway_app(prod, engine=engine, run_maintenance=False)
     with engine.begin() as conn:
         conn.exec_driver_sql("UPDATE app_meta SET value = 'false' WHERE key = 'demo'")
-    create_gateway_app(
-        settings.model_copy(update={"env": "prod"}), engine=engine, run_maintenance=False
-    )
+    app = create_gateway_app(prod, engine=engine, run_maintenance=False)
+    # The demo fault switch does not exist in production.
+    from fastapi.testclient import TestClient
+
+    assert TestClient(app).post("/demo/ledger-fault", json={"active": True}).status_code == 404
 
 
 @pytest.mark.req("SEC-34", "SEC-19", "Hard rule 8 (tokens never logged)", "SEC-25")

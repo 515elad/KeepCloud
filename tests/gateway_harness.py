@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import tempfile
 import uuid
 from dataclasses import dataclass, field
 
@@ -97,15 +98,18 @@ class Gw:
             conn.execute(text(sql), params)
 
 
-def make_gateway(settings, engine, *, clock=None, timeout_s: float = 120.0) -> Gw:
+def make_gateway(settings, engine, *, clock=None, timeout_s: float = 120.0, spool_caps=None,
+                 spool_dir=None, spool_key=None) -> Gw:  # fmt: skip
     router = respx.Router(assert_all_called=False)
     provider = router.post(PROVIDER_URL).mock(side_effect=mock_provider_answer)
     http = httpx.Client(transport=httpx.MockTransport(router.handler))
     metrics, clock = Metrics(), clock or demo_clock()
+    spool_dir = spool_dir or tempfile.mkdtemp(prefix="keepair-spool-test-")
+    update = {"provider_timeout_s": timeout_s, "spool_dir": spool_dir, "spool_key": spool_key}
     app = create_gateway_app(
-        settings.model_copy(update={"provider_timeout_s": timeout_s}),
+        settings.model_copy(update=update),
         engine=engine, clock=clock, metrics=metrics, rng=seeded_rng(99), http=http,
-        run_maintenance=False,
+        run_maintenance=False, spool_caps=spool_caps,
     )  # fmt: skip
     return Gw(
         TestClient(app, raise_server_exceptions=False),

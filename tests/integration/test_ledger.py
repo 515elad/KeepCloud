@@ -149,28 +149,36 @@ def test_db_failure_mid_reserve_leaves_no_partial_state(gw, monkeypatch):
         raise OperationalError("INSERT", {}, Exception("connection lost"))
 
     monkeypatch.setattr("keepair.gateway.service.Gateway._record", fail)
-    response = gw.chat("Build Assistant")
-    assert response.status_code == 503 and response.json()["error"]["code"] == "LEDGER_UNAVAILABLE"
+    response = gw.chat("Build Assistant")  # hard limit: fails closed
+    # Since phase 3 this is a policy answer (the budget's fail mode), not a bare 503.
+    assert response.status_code == 403 and response.json()["error"]["code"] == "BUDGET_FAIL_CLOSED"
+    monkeypatch.undo()
     assert (
         gw.rows("SELECT id, committed_micros, reserved_micros, version FROM budgets ORDER BY id")
         == before
     )
     assert not gw.rows("SELECT 1 FROM reservations WHERE credential_id IS NOT NULL")
-    assert not gw.rows("SELECT 1 FROM gateway_decisions")
-    assert not gw.rows("SELECT 1 FROM idempotency_keys")  # the client may retry
+    assert not gw.rows(
+        "SELECT 1 FROM gateway_decisions"
+    )  # the refusal is in the spool, to be replayed
+    assert gw.app.state.spool.stats().waiting == 1 and gw.app.state.spool.stats().waiting_usage == 0
 
 
 @pytest.mark.req("SEC-06", "S-34")
 def test_no_record_no_dispatch(gw, monkeypatch):
-    """If the decision cannot be recorded, the request is denied and nothing is sent."""
+    """If the decision cannot be recorded in the ledger, a hard-limit request is denied
+    and nothing is sent. (Soft and monitor budgets record to the spool first: test_fail_open.)"""
 
     def fail(*args, **kwargs):
         raise OperationalError("INSERT", {}, Exception("disk full"))
 
+    assert gw.chat("Research Agent").status_code == 202  # seen just before the failure
     monkeypatch.setattr("keepair.gateway.service.Gateway._record", fail)
-    assert gw.chat("Build Assistant").status_code == 503
+    assert gw.chat("Build Assistant").status_code == 403
+    assert gw.chat("Research Agent").status_code == 403  # approval budgets fail closed too
     assert not gw.provider.called
-    assert gw.metrics.value("keepair_failures_total", code="DATABASE_UNREACHABLE") == 1
+    # Two refusals, plus the first one's result that could not be stored for replay.
+    assert gw.metrics.value("keepair_failures_total", code="DATABASE_UNREACHABLE") >= 2
 
 
 @pytest.mark.req("SEC-35", "S-09")
