@@ -1,0 +1,13 @@
+{
+  "id": "chatcmpl-mock-0001",
+  "object": "chat.completion",
+  "created": 1768467600,
+  "model": "vendor-a/model-1",
+  "choices": [
+    {
+      "index": 0,
+      "message": {"role": "assistant", "content": "A mock answer without a usage block."},
+      "finish_reason": "stop"
+    }
+  ]
+}

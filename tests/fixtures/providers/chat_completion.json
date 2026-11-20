@@ -1,0 +1,14 @@
+{
+  "id": "chatcmpl-mock-0000",
+  "object": "chat.completion",
+  "created": 1768467600,
+  "model": "vendor-a/model-1",
+  "choices": [
+    {
+      "index": 0,
+      "message": {"role": "assistant", "content": "This is a mock answer. No real model was called."},
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {"prompt_tokens": 12, "completion_tokens": 20, "total_tokens": 32}
+}

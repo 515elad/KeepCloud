@@ -163,9 +163,19 @@ def test_there_is_no_code_path_that_lifts_a_block_yet():
         for n in dir(registry)
         if "lift" in n.lower() or "unblock" in n.lower() or "allow" in n.lower()
     ]
+
+    # From phase 2 the ledger updates budgets and reservations. The rule is about the
+    # registry: only registry.py may update the vendor or model tables.
+    def touches_registry_tables(source: str) -> bool:
+        imports = re.findall(r"from keepair\.schema import \(?([^)]*?)(?:\)|\n\n)", source, re.S)
+        names = {n.strip() for block in imports for n in block.replace("\n", ",").split(",")}
+        return bool(names & {"vendors", "models"}) and bool(
+            re.search(r"(?<![\w.])update\(", source)
+        )
+
     writers = [
         p.name
         for p in (REPO_ROOT / "src" / "keepair").rglob("*.py")
-        if re.search(r"(?<![\w.])update\(", p.read_text()) and p.name != "registry.py"
+        if p.name != "registry.py" and touches_registry_tables(p.read_text())
     ]
     assert writers == []

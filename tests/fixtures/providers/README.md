@@ -1,5 +1,11 @@
 # Provider fixtures
 
-Recorded mock-provider responses for adapter contract tests (PRD v1.4 Section 2.7). Empty in phase 0; first fixtures arrive with the gateway in phase 2.
+Response shapes for the mock provider and for adapter contract tests (PRD v1.4 Section 2.7). They follow the OpenAI-compatible chat completion shape and were written by hand from its public description. None was recorded from a real provider, and no real credential was used.
 
-No file here may come from a call made with a real credential in CI. Vendors and models are fictional (`vendor-a`, `vendor-a/model-1`).
+| File | Used for |
+|---|---|
+| `chat_completion.json` | A successful answer with a usage block. The mock provider server uses it as its template. |
+| `chat_completion_no_usage.json` | An answer with no usage block: the gateway must settle at the reserved amount. |
+| `error_500.json` | A provider failure: the gateway must release the reservation. |
+
+Vendors and models are fictional (`vendor-a`, `vendor-a/model-1`).
