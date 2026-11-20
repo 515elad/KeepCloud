@@ -30,6 +30,14 @@ FAILURE_CODES: dict[str, tuple[str, str]] = {
     # code: (severity, component)
     "DATABASE_UNREACHABLE": ("SEV2", "ledger"),
     "UNHANDLED_ERROR": ("SEV3", "app"),
+    # Gateway (phase 2)
+    "SNAPSHOT_STALE": ("SEV2", "policy_sync"),
+    "UNKNOWN_USAGE": ("SEV2", "gateway"),
+    "RESERVATION_EXPIRED": ("SEV2", "ledger"),
+    "BUDGET_OVERRUN": ("SEV2", "ledger"),
+    "PROVIDER_ERROR": ("SEV3", "gateway"),
+    "SOFT_LIMIT_EXCEEDED": ("SEV3", "ledger"),
+    "DECISION_RECORD_FAILED": ("SEV2", "gateway"),
 }
 
 _MEMORY_LIMIT = 100
@@ -98,6 +106,20 @@ class AlertStore:
             )
         )
 
+    def is_writable(self) -> bool:
+        """True when alerts can reach the database and none is waiting in memory."""
+        if self._memory:
+            self.recent(limit=1)  # tries to write the held alerts
+        if self._memory or not self._db_allowed():
+            return False
+        try:
+            with self._engine.connect() as conn:
+                conn.execute(select(alerts.c.id).limit(1))
+            return True
+        except SQLAlchemyError:
+            self._mark_db_down()
+            return False
+
     def recent(self, limit: int = 50) -> list[Alert]:
         stored: list[Alert] = []
         if self._db_allowed():
@@ -127,16 +149,27 @@ class FailureReporter:
         self._store = store
         self._metrics = metrics
         self._clock = clock
+        self._last_alert: dict[str, datetime] = {}
         metrics.describe(FAILURES_TOTAL, "Failures by reason code.")
         metrics.describe(
             ALERT_FALLBACK_TOTAL, "Alerts held in memory because the database was unreachable."
         )
 
-    def report(self, code: str, message: str) -> Alert:
+    def report(self, code: str, message: str, dedupe_s: int = 0) -> Alert | None:
+        """Count the failure and store an alert.
+
+        With ``dedupe_s``, a failure that repeats on every request stores one alert
+        per period. The metric still counts every occurrence.
+        """
         if code not in FAILURE_CODES:
             raise ValueError(f"unregistered failure code: {code}")
         severity, component = FAILURE_CODES[code]
         self._metrics.inc(FAILURES_TOTAL, code=code)
+        now = self._clock.now()
+        last = self._last_alert.get(code)
+        if dedupe_s and last is not None and (now - last).total_seconds() < dedupe_s:
+            return None
+        self._last_alert[code] = now
         return self._store.add(
             Alert(
                 raised_at=self._clock.now(),

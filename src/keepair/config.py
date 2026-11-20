@@ -21,3 +21,7 @@ class Settings(BaseSettings):
     demo_mode: bool = True
     ui_dir: Path = REPO_ROOT / "ui"
     db_connect_timeout_s: int = 2
+    provider_timeout_s: float = 120.0
+    gateway_url: str = "http://localhost:8080"
+    mock_provider_url: str = "http://localhost:8090"
+    fixtures_dir: Path = REPO_ROOT / "tests" / "fixtures" / "providers"

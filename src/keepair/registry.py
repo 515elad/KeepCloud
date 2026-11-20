@@ -42,9 +42,19 @@ class EffectiveStatus(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class Pricing:
+    input_price_micros_per_1k: int
+    output_price_micros_per_1k: int
+    currency: str
+    max_output_tokens: int
+    price_version: int
+
+
+@dataclass(frozen=True, slots=True)
 class ModelEntry:
     vendor_id: str
     status: Status
+    pricing: Pricing | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,11 +139,7 @@ def load_snapshot(conn: Connection, tenant_id: uuid.UUID) -> PolicySnapshot:
             vendors.c.tenant_id == tenant_id
         )
     ).all()
-    model_rows = conn.execute(
-        select(models.c.id, models.c.vendor_id, models.c.status, models.c.version).where(
-            models.c.tenant_id == tenant_id
-        )
-    ).all()
+    model_rows = conn.execute(select(models).where(models.c.tenant_id == tenant_id)).all()
     alias_rows = conn.execute(
         select(model_aliases.c.alias, model_aliases.c.model_id).where(
             model_aliases.c.tenant_id == tenant_id
@@ -143,7 +149,20 @@ def load_snapshot(conn: Connection, tenant_id: uuid.UUID) -> PolicySnapshot:
     return PolicySnapshot.build(
         version,
         {r.id: Status(r.status) for r in vendor_rows},
-        {r.id: ModelEntry(r.vendor_id, Status(r.status)) for r in model_rows},
+        {
+            r.id: ModelEntry(
+                r.vendor_id,
+                Status(r.status),
+                Pricing(
+                    r.input_price_micros_per_1k,
+                    r.output_price_micros_per_1k,
+                    r.price_currency,
+                    r.max_output_tokens,
+                    r.price_version,
+                ),
+            )
+            for r in model_rows
+        },
         {r.alias: r.model_id for r in alias_rows},
     )
 
