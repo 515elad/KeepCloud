@@ -52,7 +52,7 @@ Lifecycle record, aligned with ISO/IEC 12207 (plan, entry and exit criteria, rev
 | 500-request demo gives the same outcomes on every run | `test_demo_traffic_gives_the_same_outcomes_on_every_run`; also run against the Docker stack | Pass |
 | Every new failure path has metric, alert and UI row | `tests/system/test_failure_visibility.py` (9 codes) | Pass |
 | Every new field has a registry entry | `tests/system/test_field_help.py` | Pass |
-| Lint, secret scan and all tests pass | 343 tests, 0 failures; 95% line coverage | Pass locally; CI result recorded below |
+| Lint, secret scan and all tests pass | 343 tests, 0 failures; 95% line coverage | Pass locally and in CI (commit `ece192d`). The commit before it failed lint on one line and was fixed. |
 
 **Bypass suite status.**
 
