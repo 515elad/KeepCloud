@@ -48,7 +48,7 @@ Lifecycle record, aligned with ISO/IEC 12207 (plan, entry and exit criteria, rev
 | One unmatched record and one join in the 70 to 89 band in the demo | `test_demo_file_gives_one_unmatched_one_unallocated_and_one_review_join`, `test_queue_shows_one_unmatched_one_unallocated_and_one_join_in_the_review_band` | Pass |
 | Uncontrolled spend is detected from the provider delta | `test_uncontrolled_spend_detected_from_provider_usage_delta`, `test_below_threshold_is_not_flagged`, `test_uncontrolled_spend_shows_on_reconciliation_and_on_the_coverage_badge` | Pass |
 | Every new field has help; every new failure path is visible | `tests/system/test_field_help.py` (109 registry entries, 34 calculated fields checked against code), `tests/system/test_failure_visibility.py` (16 codes) | Pass |
-| Lint, secret scan and all tests pass | 460 tests, 0 failures | Pass locally; CI result recorded below |
+| Lint, secret scan and all tests pass | 460 tests, 0 failures | Pass locally and in CI (commit `7783b73`) |
 
 Bypass route B-b (a provider key used outside the gateway) is now covered by detection: `test_uncontrolled_spend_detected_from_provider_usage_delta`.
 
