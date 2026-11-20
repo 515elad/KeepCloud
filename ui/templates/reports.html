@@ -1,0 +1,48 @@
+{% extends "page.html" %}
+{% block content %}
+{% if report %}
+<section aria-labelledby="showback-title">
+  <h2 id="showback-title">Showback for {{ report.period.strftime("%Y-%m") }}</h2>
+  <p class="hint">Cost per project for one calendar month in UTC, in USD. Each column has its own state and the columns are never added to each other. {% for p in periods if p != report.period %}<a href="/reports?period={{ p.strftime('%Y-%m') }}">{{ p.strftime("%Y-%m") }}</a> {% endfor %}</p>
+  <div class="table-wrap" tabindex="0" role="region" aria-labelledby="showback-title">
+    <table class="dense" data-table="showback">
+      <thead><tr>{{ help.th("showback.department") }}{{ help.th("showback.team") }}{{ help.th("alloc.project") }}{{ help.th("budget.owner") }}{{ help.th("cost.estimated") }}{{ help.th("cost.provider_reported") }}{{ help.th("cost.invoiced") }}</tr></thead>
+      <tbody>
+        {% for r in report.rows %}
+        <tr data-project="{{ r.project }}">
+          <td>{{ r.department }}</td>
+          <td>{{ r.team }}</td>
+          <td>{{ r.project }}</td>
+          <td>{% if r.owner == "Unowned" %}<span class="reg reg--unregistered"><span aria-hidden="true">?</span> Unowned</span>{% else %}{{ r.owner }}{% endif %}</td>
+          <td class="num amount">{{ r.text(r.estimated) }}</td>
+          <td class="num amount">{% if report.provider_loaded %}{{ r.text(r.provider) }}{% else %}<span class="sub">No data</span>{% endif %}</td>
+          <td class="num amount">{% if report.invoiced_loaded %}{{ r.text(r.invoiced) }}{% else %}<span class="sub">No data</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr data-total>
+          <td colspan="4"><strong>All rows</strong></td>
+          <td class="num amount">{{ report.text(report.estimated) }}<span class="sub">{{ fin_chip(report_states[0]) }}</span></td>
+          <td class="num amount">{% if report.provider_loaded %}{{ report.text(report.provider) }}{% else %}No data{% endif %}<span class="sub">{{ fin_chip(report_states[1]) }}</span></td>
+          <td class="num amount">{% if report.invoiced_loaded %}{{ report.text(report.invoiced) }}{% else %}No data{% endif %}<span class="sub">{{ fin_chip(report_states[2]) }}</span></td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+  {% if report.not_allocated %}<p class="hint" data-not-allocated>{{ report.text(report.not_allocated) }} of provider-reported cost is not allocated to any project yet and is not in this table. See the queue on the <a href="/spend#queue-title">Spend</a> page.</p>{% endif %}
+  {% if can_export %}
+  <p class="actions"><a class="btn" href="/reports/showback.csv?period={{ report.period.strftime('%Y-%m') }}" data-export download>Download as CSV</a></p>
+  <p class="hint">The file holds the same rows with exact amounts. Text that a spreadsheet could read as a formula is written as plain text. Each download is written to the audit log.</p>
+  {% else %}
+  <p class="sub">Your role cannot download reports.</p>
+  {% endif %}
+</section>
+<section aria-labelledby="other-title">
+  <h2 id="other-title">Other reports</h2>
+  <ul class="links"><li><a href="/gateway/fail-open">Fail-open report</a></li><li><a href="/reconciliation">Reconciliation by project</a></li></ul>
+</section>
+{% elif state.tenant_id %}
+<p class="empty-state">No cost data yet.</p>
+{% endif %}
+{% endblock %}

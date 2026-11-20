@@ -1,0 +1,50 @@
+{% extends "page.html" %}
+{% block content %}
+{% if result %}
+<section aria-labelledby="verify-result-title" data-verify="{{ 'ok' if result.ok else 'broken' }}">
+  <h2 id="verify-result-title">Verification result</h2>
+  <div data-kpi data-field-id="audit.verify_result">
+    <p>{{ help.name("audit.verify_result") }} {{ help.button("audit.verify_result") }}</p>
+    {% if result.ok %}
+    <p class="notice" role="status"><span aria-hidden="true">✓</span> <strong>Chain verified.</strong> {{ result.checked }} records were recomputed and every one matches. Newest link <code>{{ result.head_hash.hex()[:12] }}</code>.</p>
+    {% else %}
+    <p class="notice notice--bad" role="alert"><span aria-hidden="true">×</span> <strong>Chain broken at record {{ result.broken_at }}.</strong> {{ result.problem }} {{ result.checked }} records before it are intact. A SEV1 alert <code>AUDIT_CHAIN_BROKEN</code> was raised.</p>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
+{% if state.tenant_id %}
+<section aria-labelledby="chain-title">
+  <h2 id="chain-title">Records</h2>
+  <p class="hint">Every administrative action is written here in the same step as the action. Each record carries a hash of itself and of the record before it, so a changed or removed record breaks the chain. Nothing in the application can edit or delete a record.</p>
+  <dl class="kpis">
+    <div data-kpi data-field-id="audit.records"><dt>{{ help.name("audit.records") }} {{ help.button("audit.records") }}</dt><dd class="num" data-audit-count>{{ "{:,}".format(total) }}</dd></div>
+  </dl>
+  {% if can_verify %}
+  <form method="post" action="/audit-log/verify"><p class="actions"><button type="submit" class="btn">Verify the chain</button></p></form>
+  {% endif %}
+  <div class="table-wrap" tabindex="0" role="region" aria-labelledby="chain-title">
+    <table class="dense" data-table="audit">
+      <thead><tr>{{ help.th("audit.seq") }}{{ help.th("audit.occurred_at") }}{{ help.th("audit.actor") }}{{ help.th("audit.action") }}{{ help.th("audit.subject") }}{{ help.th("change.reason") }}{{ help.th("audit.change") }}{{ help.th("audit.hash") }}</tr></thead>
+      <tbody>
+        {% for r in rows %}
+        <tr data-seq="{{ r.seq }}" data-action="{{ r.action }}">
+          <td class="num amount">{{ r.seq }}</td>
+          <td class="num"><time datetime="{{ r.occurred_at.isoformat() }}">{{ r.occurred_at | ts }}</time></td>
+          <td>{{ r.actor }}</td>
+          <td><code>{{ r.action }}</code></td>
+          <td>{{ r.subject }}</td>
+          <td>{% if r.reason %}{{ r.reason }}{% else %}<span aria-hidden="true">–</span><span class="sr-only">No reason given</span>{% endif %}</td>
+          <td>{% if r.before %}<span class="sub">Before <code>{{ r.before }}</code></span>{% endif %}{% if r.after %}<span class="sub">After <code>{{ r.after }}</code></span>{% endif %}{% if not r.before and not r.after %}<span aria-hidden="true">–</span><span class="sr-only">No details</span>{% endif %}</td>
+          <td><code>{{ r.hash_short }}</code></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8" class="empty">No record yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if older %}<p><a href="/audit-log?before={{ older }}">Older records</a></p>{% endif %}
+</section>
+{% endif %}
+{% endblock %}

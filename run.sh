@@ -4,7 +4,8 @@
 #   ./run.sh            build, start, wait until ready, send the demo traffic
 #   ./run.sh start      the same
 #   ./run.sh traffic    send the 500 scripted demo requests again (as new requests)
-#   ./run.sh reset      reload the original demo data
+#   ./run.sh reset      reload the original demo data (you sign in again afterwards)
+#   ./run.sh tamper     demo: change one audit record directly in the database
 #   ./run.sh status     show the services
 #   ./run.sh logs       follow the logs
 #   ./run.sh stop       stop everything and delete the demo database
@@ -21,7 +22,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# Local settings live in .env (not in git): the two ports and the spool key.
+# Local settings live in .env (not in git): the two ports, the spool key and the MFA key.
 # A port given on the command line is remembered there, so it is needed only once:
 #   KEEPAIR_UI_PORT=8100 ./run.sh
 ENV_FILE=".env"
@@ -53,6 +54,14 @@ ensure_spool_key() {
     local key
     key="$(openssl rand -base64 32 2>/dev/null || head -c 32 /dev/urandom | base64)"
     remember KEEPAIR_SPOOL_KEY "$key"
+  fi
+}
+ensure_mfa_key() {
+  # A key that encrypts the stored authenticator secrets, made once on this machine.
+  if [ -z "$(saved KEEPAIR_MFA_KEY)" ]; then
+    local key
+    key="$(openssl rand -base64 32 2>/dev/null || head -c 32 /dev/urandom | base64)"
+    remember KEEPAIR_MFA_KEY "$key"
   fi
 }
 UI_URL="http://localhost:$KEEPAIR_UI_PORT"
@@ -103,6 +112,7 @@ start() {
   need_docker
   check_ports
   ensure_spool_key
+  ensure_mfa_key
   say "Building and starting KeepAir (database, UI, gateway, mock vendor)"
   docker compose up -d $build --wait
   if [ "$traffic" = 1 ]; then send_traffic 1; fi
@@ -112,10 +122,14 @@ KeepAir is running.
 
   UI        $UI_URL            (start here)
   Gateway   $GATEWAY_URL/v1/chat/completions
-  Demo script: docs/demo/phase-4.md
+
+  Sign in:  user alice.admin   password northwind-demo-2026
+            The sign-in page lists the demo accounts and shows the authenticator code.
+  Demo scripts: docs/README.md (all phases), newest docs/demo/phase-6.md
 
   ./run.sh traffic   send the demo traffic again
   ./run.sh reset     reload the original demo data
+  ./run.sh tamper    demo: change an audit record behind the application's back
   ./run.sh stop      stop everything
 MSG
 }
@@ -129,7 +143,13 @@ case "${1:-start}" in
     say "Reloading the demo data"
     docker compose restart app
     docker compose up -d --no-build --wait app
-    echo "Done. Budgets, registry and credentials are back to the seeded state."
+    echo "Done. Budgets, registry, users and the audit log are back to the seeded state."
+    echo "Everyone is signed out. Sign in again."
+    ;;
+  tamper)
+    need_docker
+    say "Changing one audit record directly in the database (demo)"
+    docker compose exec app python -m keepair.demo.tamper
     ;;
   status) need_docker; docker compose ps ;;
   logs) need_docker; docker compose logs -f ;;
@@ -150,6 +170,6 @@ case "${1:-start}" in
     say "Tests (starts a throwaway PostgreSQL 16 container)"
     .venv/bin/pytest --cov
     ;;
-  -h|--help|help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//' ;;
+  -h|--help|help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) fail "Unknown command: $1. Run ./run.sh help" ;;
 esac

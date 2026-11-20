@@ -1,6 +1,17 @@
 # Local demo stack: KeepAir + PostgreSQL 16. Development and demo only.
-# The database password below is a local default, not a secret. Real
-# deployments supply KEEPAIR_DATABASE_URL from their own secret store.
+# The database passwords below are local defaults, not secrets. Real
+# deployments supply the KEEPAIR_*_DATABASE_URL values from their own secret store.
+#
+# Two database roles: "keepair" owns the tables and is used only by the UI
+# container's start-up step (migrations and the demo seed). The running services
+# connect as "keepair_app", which cannot change or delete audit records.
+x-app-env: &app-env
+  KEEPAIR_ENV: demo
+  KEEPAIR_DEMO_MODE: "true"
+  KEEPAIR_DATABASE_URL: postgresql+psycopg://keepair_app:${KEEPAIR_APP_DB_PASSWORD:-keepair_app}@db:5432/keepair
+  KEEPAIR_MOCK_PROVIDER_URL: http://mock-provider:8090
+  KEEPAIR_GATEWAY_URL: http://gateway:8080
+
 services:
   db:
     image: postgres:16-alpine
@@ -16,15 +27,15 @@ services:
       timeout: 2s
       retries: 30
 
-  # The UI. Loads the demo data at start.
+  # The UI. Runs the migrations and loads the demo data at start, as the owner role.
   app:
     build: .
-    environment: &app-env
-      KEEPAIR_ENV: demo
-      KEEPAIR_DEMO_MODE: "true"
-      KEEPAIR_DATABASE_URL: postgresql+psycopg://keepair:${KEEPAIR_DB_PASSWORD:-keepair}@db:5432/keepair
-      KEEPAIR_MOCK_PROVIDER_URL: http://mock-provider:8090
-      KEEPAIR_GATEWAY_URL: http://gateway:8080
+    environment:
+      <<: *app-env
+      KEEPAIR_OWNER_DATABASE_URL: postgresql+psycopg://keepair:${KEEPAIR_DB_PASSWORD:-keepair}@db:5432/keepair
+      KEEPAIR_APP_DB_PASSWORD: ${KEEPAIR_APP_DB_PASSWORD:-keepair_app}
+      # Key for the stored authenticator secrets. ./run.sh generates it into .env.
+      KEEPAIR_MFA_KEY: ${KEEPAIR_MFA_KEY:-}
     depends_on:
       db:
         condition: service_healthy
