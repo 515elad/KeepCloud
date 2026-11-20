@@ -43,7 +43,15 @@ services:
   gateway:
     build: .
     command: ["uvicorn", "keepair.gateway.main:app", "--host", "0.0.0.0", "--port", "8080"]
-    environment: *app-env
+    environment:
+      <<: *app-env
+      # Fail-open spool: kept on a volume and encrypted with a key that ./run.sh
+      # generates into .env (not in git). Without a key the gateway uses a
+      # throwaway one and spooled records do not survive a restart.
+      KEEPAIR_SPOOL_DIR: /spool
+      KEEPAIR_SPOOL_KEY: ${KEEPAIR_SPOOL_KEY:-}
+    volumes:
+      - spool:/spool
     depends_on:
       app:
         condition: service_healthy
@@ -85,3 +93,6 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+
+volumes:
+  spool:

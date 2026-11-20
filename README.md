@@ -2,7 +2,7 @@
 
 KeepCloud MVP (product name: KeepAir): visibility and enforceable budgets for AI spend.
 
-**Status:** phase 2 of 6. The gateway reserves budget before every request, refuses blocked vendors, blocked or unknown models and exhausted hard limits, and settles afterwards, against a mock provider. The UI shows budgets, the registry, the denials feed and live component health.
+**Status:** phase 3 of 6. The gateway reserves budget before every request and refuses blocked vendors, blocked or unknown models and exhausted hard limits, against a mock provider. When the ledger is down, monitor and soft budgets continue through an encrypted spool that is replayed afterwards; hard limits and blocks refuse. The UI shows budgets, the registry, denials, live health, and a fail-open banner and report.
 
 ## Run it
 
@@ -17,6 +17,7 @@ This builds and starts everything, loads the demo data and sends the scripted de
 | Command | What it does |
 |---|---|
 | `./run.sh` | Build, start, wait until ready, send the demo traffic |
+| `KEEPAIR_UI_PORT=8100 ./run.sh` | The same on another port, if 8000 is taken. The choice is remembered. |
 | `./run.sh traffic` | Send the 500 demo requests again |
 | `./run.sh reset` | Reload the original demo data |
 | `./run.sh stop` | Stop everything and delete the demo database |

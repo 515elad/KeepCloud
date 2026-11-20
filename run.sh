@@ -14,16 +14,47 @@
 #                     --no-build     reuse images that are already built
 #
 # If port 8000 or 8080 is taken:  KEEPAIR_UI_PORT=8100 KEEPAIR_GATEWAY_PORT=8180 ./run.sh
+# The choice is remembered in .env, so later commands need no prefix.
 #
 # Needs Docker with the compose plugin. Nothing else. No account, key or
 # internet service is used: the "vendor" is a mock server in the same stack.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# Change these if another program already uses the port:
-#   KEEPAIR_UI_PORT=8100 KEEPAIR_GATEWAY_PORT=8180 ./run.sh
+# Local settings live in .env (not in git): the two ports and the spool key.
+# A port given on the command line is remembered there, so it is needed only once:
+#   KEEPAIR_UI_PORT=8100 ./run.sh
+ENV_FILE=".env"
+
+saved() {  # saved NAME -> value from .env, or nothing
+  [ -f "$ENV_FILE" ] && sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1 || true
+}
+
+remember() {  # remember NAME VALUE
+  touch "$ENV_FILE"
+  grep -v "^$1=" "$ENV_FILE" > "$ENV_FILE.tmp" || true
+  printf '%s=%s\n' "$1" "$2" >> "$ENV_FILE.tmp"
+  mv "$ENV_FILE.tmp" "$ENV_FILE"
+}
+
+for name in KEEPAIR_UI_PORT KEEPAIR_GATEWAY_PORT; do
+  if [ -n "${!name:-}" ]; then
+    remember "$name" "${!name}"
+  elif [ -n "$(saved "$name")" ]; then
+    export "$name=$(saved "$name")"
+  fi
+done
 export KEEPAIR_UI_PORT="${KEEPAIR_UI_PORT:-8000}"
 export KEEPAIR_GATEWAY_PORT="${KEEPAIR_GATEWAY_PORT:-8080}"
+
+ensure_spool_key() {
+  # A key for the gateway's encrypted fail-open spool, made once on this machine.
+  if [ -z "$(saved KEEPAIR_SPOOL_KEY)" ]; then
+    local key
+    key="$(openssl rand -base64 32 2>/dev/null || head -c 32 /dev/urandom | base64)"
+    remember KEEPAIR_SPOOL_KEY "$key"
+  fi
+}
 UI_URL="http://localhost:$KEEPAIR_UI_PORT"
 GATEWAY_URL="http://localhost:$KEEPAIR_GATEWAY_PORT"
 
@@ -49,7 +80,8 @@ check_ports() {
     port="${!name}"
     if port_busy "$port"; then
       fail "Port $port is already used by another program. Pick another one, for example:
-       $name=$((port + 100)) ./run.sh"
+       $name=$((port + 100)) ./run.sh
+       (it is remembered, so you only need to do this once)"
     fi
   done
 }
@@ -70,6 +102,7 @@ start() {
   done
   need_docker
   check_ports
+  ensure_spool_key
   say "Building and starting KeepAir (database, UI, gateway, mock vendor)"
   docker compose up -d $build --wait
   if [ "$traffic" = 1 ]; then send_traffic 1; fi
@@ -79,7 +112,7 @@ KeepAir is running.
 
   UI        $UI_URL            (start here)
   Gateway   $GATEWAY_URL/v1/chat/completions
-  Demo script: docs/demo/phase-2.md
+  Demo script: docs/demo/phase-3.md
 
   ./run.sh traffic   send the demo traffic again
   ./run.sh reset     reload the original demo data
@@ -117,6 +150,6 @@ case "${1:-start}" in
     say "Tests (starts a throwaway PostgreSQL 16 container)"
     .venv/bin/pytest --cov
     ;;
-  -h|--help|help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' ;;
+  -h|--help|help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) fail "Unknown command: $1. Run ./run.sh help" ;;
 esac

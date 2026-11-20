@@ -15,7 +15,8 @@ COPY tests/fixtures/providers ./tests/fixtures/providers
 RUN pip install --no-cache-dir --no-deps -e .
 
 # Run as a non-root user (SEC-47).
-RUN useradd --system --uid 10001 keepair
+RUN useradd --system --uid 10001 keepair \
+    && mkdir /spool && chown keepair /spool
 USER keepair
 
 EXPOSE 8000

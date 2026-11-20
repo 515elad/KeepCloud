@@ -76,9 +76,19 @@ Provider calls are mocked with respx. The mocked answer uses the same fixture te
 
 The concurrency test uses 200 threads against a real PostgreSQL 16 container. Fault injection replaces one function with one that raises (database error, provider timeout, stale snapshot).
 
+Phase 3 coverage:
+
+| Requirement | Tests |
+|---|---|
+| SEC-06 fail-open through the spool, fail closed for hard limits and blocks | `tests/integration/test_fail_open.py` |
+| Spool: encryption, caps, restart, tampering, key rules | `tests/integration/test_fail_open.py` (spool section) |
+| UX-7 banner and acknowledgement, FR-12 fail-open report, demo console | `tests/system/test_fail_open_ui.py` |
+
+Fault injection in phase 3: a switch that makes ledger writes fail, an engine that points at a closed port (PostgreSQL gone), a disk that refuses to flush, a process that dies after dispatch, and a spool file with changed or foreign lines.
+
 ## Browser checks
 
-HTTP-level tests do not send everything a browser sends. After a phase 1 defect that only a real browser showed (see `docs/lifecycle/phase-2.md`), every form is also clicked through in Chromium before a phase is closed: block, create credential, revoke. This is manual for now; an automated browser test is a candidate for the next phase.
+HTTP-level tests do not send everything a browser sends. After a phase 1 defect that only a real browser showed (see `docs/lifecycle/phase-2.md`), every form is also clicked through in Chromium before a phase is closed: block, create credential, revoke, the demo console buttons and Acknowledge. This is manual for now; an automated browser test is a candidate for the next phase.
 
 ## How to run
 

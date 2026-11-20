@@ -8,7 +8,7 @@ Needs Docker. No account, API key or internet service is used.
 ./run.sh
 ```
 
-It builds and starts the stack, loads the demo data and sends the scripted demo traffic. Open <http://localhost:8000>, then follow the demo script for the current phase. The gateway listens on <http://localhost:8080>. `./run.sh help` lists the other commands (traffic, reset, stop, test).
+It builds and starts the stack, loads the demo data and sends the scripted demo traffic. Open <http://localhost:8000>, then follow the demo script for the current phase. The gateway listens on <http://localhost:8080>. `./run.sh help` lists the other commands (traffic, reset, stop, test). If a port is taken, `KEEPAIR_UI_PORT=8100 ./run.sh` picks another one and remembers it in `.env`.
 
 The demo scripts name the underlying `docker compose` commands step by step; `./run.sh` runs the same ones.
 
@@ -17,6 +17,7 @@ The demo scripts name the underlying `docker compose` commands step by step; `./
 | 0 Foundation | [demo/phase-0.md](demo/phase-0.md) | [lifecycle/phase-0.md](lifecycle/phase-0.md) |
 | 1 Budgets and policy visibility | [demo/phase-1.md](demo/phase-1.md) | [lifecycle/phase-1.md](lifecycle/phase-1.md) |
 | 2 Gateway, ledger and denials | [demo/phase-2.md](demo/phase-2.md) | [lifecycle/phase-2.md](lifecycle/phase-2.md) |
+| 3 Fail-open spool and visibility of failures | [demo/phase-3.md](demo/phase-3.md) | [lifecycle/phase-3.md](lifecycle/phase-3.md) |
 
 ## Map
 
