@@ -8,8 +8,8 @@ services:
       POSTGRES_USER: keepair
       POSTGRES_PASSWORD: ${KEEPAIR_DB_PASSWORD:-keepair}
       POSTGRES_DB: keepair
-    ports:
-      - "127.0.0.1:5432:5432"
+    # The database is not published on the host: only the services in this stack
+    # need it, and port 5432 is often taken by another PostgreSQL.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U keepair -d keepair"]
       interval: 2s
@@ -29,7 +29,7 @@ services:
       db:
         condition: service_healthy
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:${KEEPAIR_UI_PORT:-8000}:8000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
       interval: 2s
@@ -50,7 +50,7 @@ services:
       mock-provider:
         condition: service_healthy
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${KEEPAIR_GATEWAY_PORT:-8080}:8080"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
       interval: 2s

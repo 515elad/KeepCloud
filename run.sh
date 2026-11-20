@@ -13,13 +13,19 @@
 # Options for start:  --no-traffic   do not send the demo traffic
 #                     --no-build     reuse images that are already built
 #
+# If port 8000 or 8080 is taken:  KEEPAIR_UI_PORT=8100 KEEPAIR_GATEWAY_PORT=8180 ./run.sh
+#
 # Needs Docker with the compose plugin. Nothing else. No account, key or
 # internet service is used: the "vendor" is a mock server in the same stack.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-UI_URL="http://localhost:8000"
-GATEWAY_URL="http://localhost:8080"
+# Change these if another program already uses the port:
+#   KEEPAIR_UI_PORT=8100 KEEPAIR_GATEWAY_PORT=8180 ./run.sh
+export KEEPAIR_UI_PORT="${KEEPAIR_UI_PORT:-8000}"
+export KEEPAIR_GATEWAY_PORT="${KEEPAIR_GATEWAY_PORT:-8080}"
+UI_URL="http://localhost:$KEEPAIR_UI_PORT"
+GATEWAY_URL="http://localhost:$KEEPAIR_GATEWAY_PORT"
 
 say() { printf '\n==> %s\n' "$*"; }
 fail() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
@@ -28,6 +34,24 @@ need_docker() {
   command -v docker >/dev/null 2>&1 || fail "Docker is not installed. Install Docker Desktop (or Docker Engine) and run this again."
   docker compose version >/dev/null 2>&1 || fail "The Docker compose plugin is missing. Update Docker and run this again."
   docker info >/dev/null 2>&1 || fail "Docker is installed but not running. Start Docker and run this again."
+}
+
+port_busy() {
+  # True when something that is not this stack already listens on the port.
+  (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null
+}
+
+check_ports() {
+  # If our own UI is already running, the ports are ours.
+  if [ -n "$(docker compose ps --status running -q app 2>/dev/null)" ]; then return; fi
+  local name port
+  for name in KEEPAIR_UI_PORT KEEPAIR_GATEWAY_PORT; do
+    port="${!name}"
+    if port_busy "$port"; then
+      fail "Port $port is already used by another program. Pick another one, for example:
+       $name=$((port + 100)) ./run.sh"
+    fi
+  done
 }
 
 send_traffic() {
@@ -45,6 +69,7 @@ start() {
     esac
   done
   need_docker
+  check_ports
   say "Building and starting KeepAir (database, UI, gateway, mock vendor)"
   docker compose up -d $build --wait
   if [ "$traffic" = 1 ]; then send_traffic 1; fi
@@ -92,6 +117,6 @@ case "${1:-start}" in
     say "Tests (starts a throwaway PostgreSQL 16 container)"
     .venv/bin/pytest --cov
     ;;
-  -h|--help|help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//' ;;
+  -h|--help|help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) fail "Unknown command: $1. Run ./run.sh help" ;;
 esac
