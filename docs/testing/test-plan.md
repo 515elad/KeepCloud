@@ -96,9 +96,22 @@ Phase 4 coverage:
 
 Billing fixtures are the generated demo files in `demo/billing/`. `test_committed_demo_billing_files_are_what_the_generator_writes` keeps the committed copies equal to the generator's output.
 
+Phase 5 and 6 coverage:
+
+| Requirement | Tests |
+|---|---|
+| FR-13 TOTP, passwords, permission matrix; SEC-15 rules; FR-22 scope rule; SEC-29 neutralization; SEC-32 hash | `tests/unit/test_identity_units.py` (RFC 6238 vectors, a property test for CSV cells) |
+| FR-13 sign-in, sessions, lockout, step-up; FR-17 owner rule; FR-11 held requests; SEC-07 and SEC-15 two-person actions; FR-22 kill switch | `tests/integration/test_people_controls.py` |
+| SEC-32 tamper evidence, the restricted database role, the daily verifier | `tests/integration/test_audit_chain.py` |
+| FR-13 and SEC-14: every route as an anonymous visitor and as each role; step-up on every policy route | `tests/system/test_access.py` |
+| UX-7, UX-11, UX-D2 pages: approvals, block lift, kill switch, owners, users | `tests/system/test_people_pages.py` |
+| FR-12 showback and export; SEC-31 every administrative action audited; verify and tamper | `tests/system/test_reports_audit.py` |
+
+Guard tests that fail when something new is added without its test: a route without a permission entry (`test_every_route_names_a_permission_and_no_entry_is_stale`), a POST route without an audit expectation (`test_every_post_route_has_an_audit_expectation`), a failure code without an injector, a field without help.
+
 ## Browser checks
 
-HTTP-level tests do not send everything a browser sends. After a phase 1 defect that only a real browser showed (see `docs/lifecycle/phase-2.md`), every form is also clicked through in Chromium before a phase is closed: block, create credential, revoke, the demo console buttons, Acknowledge, the billing file upload and the manual assignment. This is manual for now; an automated browser test is a candidate for the next phase.
+HTTP-level tests do not send everything a browser sends. After a phase 1 defect that only a real browser showed (see `docs/lifecycle/phase-2.md`), every form is also clicked through in Chromium before a phase is closed: block, create credential, revoke, the demo console buttons, Acknowledge, the billing file upload and the manual assignment, sign-in with two separate sessions, approvals, the block lift, the kill switch, the CSV download and the audit chain check before and after `./run.sh tamper`. This is manual for now; an automated browser test is a candidate for the next phase.
 
 ## How to run
 
