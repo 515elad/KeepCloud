@@ -42,7 +42,7 @@ Lifecycle record, aligned with ISO/IEC 12207 (plan, entry and exit criteria, rev
 | Hash chain detects tampering (brief) | `tests/integration/test_audit_chain.py`: changed record, each covered field, removed record, removed tail, inserted record, rewritten hash | Pass |
 | App role cannot UPDATE or DELETE audit rows (brief) | `test_app_role_cannot_update_or_delete_audit_rows` (7 statements), `test_trigger_refuses_changes_even_for_a_role_with_the_privilege`, `test_the_services_work_under_the_restricted_role` | Pass |
 | Verify button shows the result; tampering shows as a SEV1 alert | `test_verify_button_recomputes_the_chain_and_shows_the_result`, `test_tampering_is_shown_as_a_verify_failure_and_a_sev1_alert`, `test_gateway_upkeep_verifies_the_chain_at_start_and_daily`, failure-visibility injector for `AUDIT_CHAIN_BROKEN` | Pass |
-| Lint, secret scan and all tests pass | `docs/testing/test-report.md` | Pass |
+| Lint, secret scan and all tests pass | 603 tests, 0 failures, 95% coverage; `docs/testing/test-report.md` | Pass locally and in CI (commit `0098e2d`) |
 
 **Checked by hand in Chromium against the Docker stack.** The CSV download through a real click, the audit log, verify (intact), `./run.sh tamper`, verify (broken at record 8), the SEV1 row on Overview, and the "i" popover on a new field.
 

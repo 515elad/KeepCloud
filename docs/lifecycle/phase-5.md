@@ -47,7 +47,7 @@ Lifecycle record, aligned with ISO/IEC 12207 (plan, entry and exit criteria, rev
 | Lift requires a second administrator, with MFA, within 24 hours (brief) | `test_lift_block_requires_second_admin`, `test_two_person_request_expires_after_24_hours`, `test_block_lift_needs_a_second_administrator_through_the_pages`, `test_a_block_can_only_be_lifted_through_the_two_person_approval` | Pass |
 | Kill switch denies within 5 s (brief); impact preview; two-person deactivation | `test_kill_switch_denies_within_5s`, `test_kill_switch_scopes`, `test_kill_switch_holds_while_the_ledger_is_down_and_for_approved_requests`, `test_kill_switch_off_requires_second_admin`, `test_kill_switch_preview_activation_indicator_and_two_person_off` | Pass |
 | Every new field has help; every new failure path is visible | `tests/system/test_field_help.py` (163 registry entries, 43 calculated fields checked against code), `tests/system/test_failure_visibility.py` (18 codes, new: `ACCOUNT_LOCKED`) | Pass |
-| Lint, secret scan and all tests pass | See the final test report, `docs/testing/test-report.md` | Pass |
+| Lint, secret scan and all tests pass | 603 tests, 0 failures; `docs/testing/test-report.md` | Pass locally and in CI (commit `0098e2d`) |
 
 Bypass route B-l (owner or override tampered to lift a limit) is now covered by the two-person rule and the audit chain.
 
