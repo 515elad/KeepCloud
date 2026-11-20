@@ -69,3 +69,23 @@
     if (!open) openedByFocus = false;
   }, true);
 })();
+
+// Fail-open banner (UX-7): notice a change within a few seconds without a manual reload.
+(() => {
+  "use strict";
+  const known = document.body.dataset.failOpen;
+  if (known === undefined) return;
+  const check = async () => {
+    try {
+      const response = await fetch("/api/fail-open", { cache: "no-store" });
+      if (!response.ok) return;
+      const { signature } = await response.json();
+      // Do not reload over text the user is typing.
+      const typing = document.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+      if (signature !== known && !typing) window.location.reload();
+    } catch (error) {
+      // The UI server did not answer; the next round tries again.
+    }
+  };
+  window.setInterval(check, 4000);
+})();

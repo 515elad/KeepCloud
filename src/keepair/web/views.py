@@ -14,6 +14,7 @@ from keepair.registry import EffectiveStatus, Status, effective_model_status
 from keepair.schema import (
     agents,
     budgets,
+    fail_events,
     gateway_credentials,
     gateway_decisions,
     model_aliases,
@@ -342,6 +343,10 @@ REASON_TEXT = {
     "APPROVAL_REQUIRED": "Held until an approver decides",
     "RATE_LIMITED": "Too many open requests for this credential",
     "LEDGER_UNAVAILABLE": "The ledger could not be reached",
+    "BUDGET_FAIL_CLOSED": "The ledger is down and this budget must be checked before sending",
+    "FAIL_OPEN_CAPACITY": "The fail-open spool is full",
+    "FAIL_OPEN": "Sent without a budget check while the ledger was down",
+    "AUTHENTICATION_FAILED": "The credential was not accepted",
     "UPSTREAM_TIMEOUT": "The vendor did not answer in time",
     "UPSTREAM_ERROR": "The vendor returned an error",
 }
@@ -511,3 +516,175 @@ def load_credentials(conn: Connection, tenant_id: uuid.UUID) -> CredentialsView:
         ],
         agents=[tuple(r) for r in agent_rows],
     )
+
+
+# --- Fail-open (UX-7, FR-12) ----------------------------------------------------
+
+
+@dataclass(slots=True)
+class FailOpenState:
+    """What the banner needs. Combines the gateway's own status with the ledger's records."""
+
+    gateway_reachable: bool = False
+    active: bool = False  # the gateway reports that it cannot use the ledger
+    simulated: bool = False
+    since: datetime | None = None
+    waiting: int = 0  # requests in the spool, not yet in the ledger
+    unacknowledged: int = 0  # replayed events nobody has acknowledged
+    first_at: datetime | None = None
+    last_at: datetime | None = None
+
+    @property
+    def show_banner(self) -> bool:
+        return self.active or self.waiting > 0 or self.unacknowledged > 0
+
+    @property
+    def count(self) -> int:
+        return self.waiting + self.unacknowledged
+
+    @property
+    def signature(self) -> str:
+        return f"{int(self.active)}:{self.waiting}:{self.unacknowledged}"
+
+
+def fail_open_from_status(status: dict | None) -> FailOpenState:
+    from keepair.clock import from_iso
+
+    if status is None:
+        return FailOpenState()
+    ledger_part, spool_part = status.get("ledger", {}), status.get("spool", {})
+    since = ledger_part.get("down_since")
+    return FailOpenState(
+        gateway_reachable=True,
+        active=not ledger_part.get("reachable", True),
+        simulated=bool(ledger_part.get("simulated_fault")),
+        since=from_iso(since) if since else None,
+        waiting=int(spool_part.get("waiting_requests", 0)),
+    )
+
+
+def add_unacknowledged(conn: Connection, tenant_id: uuid.UUID, state: FailOpenState) -> None:
+    f = fail_events
+    row = conn.execute(
+        select(func.count(), func.min(f.c.occurred_at), func.max(f.c.occurred_at)).where(
+            f.c.tenant_id == tenant_id, f.c.kind == "FAIL_OPEN", f.c.acknowledged_at.is_(None)
+        )
+    ).one()
+    state.unacknowledged, state.first_at, state.last_at = row[0], row[1], row[2]
+
+
+@dataclass(slots=True)
+class FailOpenRow:
+    occurred_at: datetime
+    agent: str
+    project: str
+    budget: str
+    model: str
+    amount_text: str
+    usage_known: bool
+    replayed_at: datetime
+    acknowledged_at: datetime | None
+    acknowledged_by: str | None
+
+
+@dataclass(slots=True)
+class FailOpenReport:
+    events: int
+    unacknowledged: int
+    rows: list[FailOpenRow]
+
+
+def count_fail_open(rows) -> tuple[int, int]:
+    """events = number of fail-open records; unacknowledged = those with no acknowledgement."""
+    return len(rows), sum(1 for r in rows if r.acknowledged_at is None)
+
+
+def load_fail_open_report(
+    conn: Connection, tenant_id: uuid.UUID, limit: int = 200
+) -> FailOpenReport:
+    f = fail_events
+    rows = conn.execute(
+        select(f)
+        .where(f.c.tenant_id == tenant_id, f.c.kind == "FAIL_OPEN")
+        .order_by(f.c.occurred_at.desc(), f.c.id.desc())
+    ).all()
+    names = load_scope_names(conn, tenant_id)
+    budget_scope = dict(
+        conn.execute(
+            select(budgets.c.id, budgets.c.scope_id).where(budgets.c.tenant_id == tenant_id)
+        ).all()
+    )
+    events, unacknowledged = count_fail_open(rows)
+    return FailOpenReport(
+        events=events,
+        unacknowledged=unacknowledged,
+        rows=[
+            FailOpenRow(
+                occurred_at=r.occurred_at,
+                agent=r.agent or "Unknown",
+                project=r.project or "Unknown",
+                budget=names.get(budget_scope.get(r.budget_id), "Unknown"),
+                model=r.model_id or "",
+                # One request often costs less than a cent: keep the decimals that show it.
+                amount_text=(
+                    format_unit_price(r.amount_micros, r.currency)
+                    if 0 < r.amount_micros < 10_000
+                    else format_money(r.amount_micros, r.currency)
+                ),
+                usage_known=r.usage_known,
+                replayed_at=r.replayed_at,
+                acknowledged_at=r.acknowledged_at,
+                acknowledged_by=r.acknowledged_by,
+            )
+            for r in rows[:limit]
+        ],
+    )
+
+
+# Demo console: one request of each kind, to show what an outage changes.
+CONSOLE_REQUESTS = (
+    ("Ticket Triage", "model-1"),
+    ("Reply Drafts", "va-fast"),
+    ("Build Assistant", "model-1"),
+    ("Log Summarizer", "model-1"),
+    ("Research Agent", "model-1"),
+    ("Ticket Triage", "vb-large"),
+    ("Reply Drafts", "vendor-a/model-3"),
+    ("Call Notes", "vendor-a/model-9"),
+)
+
+
+@dataclass(slots=True)
+class ConsoleResult:
+    agent: str
+    project: str
+    limit_kind: str
+    model: str
+    outcome: str
+    code: str
+    sent: bool
+
+
+def describe_outcome(status: int, decision: str | None, code: str | None) -> tuple[str, str, bool]:
+    """(plain words, code, was it sent to the vendor)."""
+    if status == 200 and decision == "FAIL_OPEN":
+        return REASON_TEXT["FAIL_OPEN"], "FAIL_OPEN", True
+    if status == 200:
+        return "Sent. Budget reserved first, then settled", "ALLOWED", True
+    code = code or f"HTTP_{status}"
+    return REASON_TEXT.get(code, "Refused"), code, False
+
+
+def limit_kinds(conn: Connection, tenant_id: uuid.UUID) -> dict[str, str]:
+    """Per project: does its limit path contain a budget that stops spend?"""
+    all_budgets = B.load_budgets(conn, tenant_id)
+    names = load_scope_names(conn, tenant_id)
+    out = {}
+    for b in all_budgets.values():
+        if b.scope_type == "PROJECT":
+            path = B.constraint_path(b, all_budgets)
+            limiting = any(x.enforcing for x in path)
+            out[names.get(b.scope_id, "")] = (
+                "Hard limit or approval on its path" if limiting else "Monitor and soft only"
+            )
+    return out

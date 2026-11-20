@@ -122,18 +122,82 @@ def _soft_limit(gw, monkeypatch):
 
 
 def _decision_record_failed(gw, monkeypatch):
-    from sqlalchemy.exc import OperationalError
+    """The refusal can be written neither to the ledger nor to the spool."""
+    gw.app.state.ledger_state.set_fault(True)
 
-    def fail(*a, **k):
-        raise OperationalError("INSERT", {}, Exception("secret-detail-that-must-not-leak"))
+    def disk_error(*a, **k):
+        raise OSError("secret-detail-that-must-not-leak")
 
-    monkeypatch.setattr("keepair.gateway.service.Gateway._record", fail)
+    monkeypatch.setattr("os.fsync", disk_error)
     response = gw.chat(model="vendor-b/model-1")
-    assert response.status_code == 403  # still refused, although the record could not be written
+    assert response.status_code == 403  # still refused, although no record could be written
     monkeypatch.undo()
+    gw.app.state.ledger_state.set_fault(False)
+
+
+# --- Fail-open failure paths (phase 3)
+
+
+def _fail_open(gw, monkeypatch):
+    gw.app.state.ledger_state.set_fault(True)
+    assert gw.chat("Ticket Triage").headers["x-keepair-decision"] == "FAIL_OPEN"
+    gw.app.state.ledger_state.set_fault(False)
+
+
+def _fail_open_prolonged(gw, monkeypatch):
+    from datetime import timedelta
+
+    gw.app.state.ledger_state.set_fault(True)
+    gw.clock.advance(timedelta(minutes=16))
+    gw.app.state.maintenance.tick()
+    gw.app.state.ledger_state.set_fault(False)
+
+
+def _spool_write_failed(gw, monkeypatch):
+    gw.app.state.ledger_state.set_fault(True)
+
+    def disk_error(*a, **k):
+        raise OSError("secret-detail-that-must-not-leak")
+
+    monkeypatch.setattr("os.fsync", disk_error)
+    assert gw.chat("Ticket Triage").status_code == 503
+    monkeypatch.undo()
+    gw.app.state.ledger_state.set_fault(False)
+
+
+def inject_spool_full(settings, engine, unreachable_engine, monkeypatch):
+    from keepair.gateway.spool import Caps
+
+    gw = make_gateway(settings, engine, spool_caps=Caps(max_records=1))
+    gw.app.state.ledger_state.set_fault(True)
+    assert [gw.chat("Ticket Triage").status_code for _ in range(2)] == [200, 503]
+    gw.app.state.ledger_state.set_fault(False)
+    ui = make_ui(settings, engine)
+    ui.metrics, ui.client_for_metrics = gw.metrics, gw.client
+    return ui
+
+
+def inject_spool_corrupt(settings, engine, unreachable_engine, monkeypatch, tmp_path_factory=None):
+    import base64
+    import tempfile
+    from pathlib import Path
+
+    folder = Path(tempfile.mkdtemp(prefix="keepair-corrupt-"))
+    (folder / "fail-open.spool").write_bytes(b"bm90IGEgcmVhbCByZWNvcmQ=\n")
+    key = base64.b64encode(b"k" * 32).decode()
+    gw = make_gateway(settings, engine, spool_dir=folder, spool_key=key)
+    gw.app.state.maintenance.tick()
+    ui = make_ui(settings, engine)
+    ui.metrics, ui.client_for_metrics = gw.metrics, gw.client
+    return ui
 
 
 INJECTORS = {
+    "FAIL_OPEN": gateway_failure(_fail_open),
+    "FAIL_OPEN_PROLONGED": gateway_failure(_fail_open_prolonged),
+    "SPOOL_WRITE_FAILED": gateway_failure(_spool_write_failed),
+    "SPOOL_FULL": inject_spool_full,
+    "SPOOL_CORRUPT": inject_spool_corrupt,
     "DATABASE_UNREACHABLE": inject_database_unreachable,
     "UNHANDLED_ERROR": inject_unhandled_error,
     "SNAPSHOT_STALE": gateway_failure(_snapshot_stale),

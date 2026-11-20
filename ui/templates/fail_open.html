@@ -1,0 +1,45 @@
+{% extends "page.html" %}
+{% block title %}Fail-open report{% endblock %}
+{% block heading %}
+<p class="crumbs"><a href="/gateway">Gateway</a></p>
+<h1>Fail-open report</h1>
+{% endblock %}
+{% block content %}
+{% set fo = state.fail_open %}
+<section aria-labelledby="now-title">
+  <h2 id="now-title">Now</h2>
+  <p class="hint">When the ledger cannot be reached, requests whose budgets are all monitor or soft are still sent, after a record is written to an encrypted spool. Hard limits, approval budgets and blocks refuse. {{ pending("SD-04") }}</p>
+  <dl class="kpis">
+    <div data-kpi data-field-id="failopen.state"><dt>{{ help.name("failopen.state") }} {{ help.button("failopen.state") }}</dt><dd>{% if not fo.gateway_reachable %}<span class="status status--unknown"><span class="status__icon" aria-hidden="true">?</span>Unknown</span><span class="sub">The gateway does not answer.</span>{% elif fo.active %}<span class="status status--failing"><span class="status__icon" aria-hidden="true">×</span>Active</span>{% else %}<span class="status status--healthy"><span class="status__icon" aria-hidden="true">✓</span>Not active</span>{% endif %}</dd></div>
+    <div data-kpi data-field-id="failopen.waiting"><dt>{{ help.name("failopen.waiting") }} {{ help.button("failopen.waiting") }}</dt><dd class="num">{% if fo.gateway_reachable %}{{ fo.waiting }}{% else %}Unknown{% endif %}</dd></div>
+    <div data-kpi data-field-id="failopen.events"><dt>{{ help.name("failopen.events") }} {{ help.button("failopen.events") }}</dt><dd class="num">{{ report.events if report else "Not loaded" }}</dd></div>
+    <div data-kpi data-field-id="failopen.unacknowledged"><dt>{{ help.name("failopen.unacknowledged") }} {{ help.button("failopen.unacknowledged") }}</dt><dd class="num">{{ report.unacknowledged if report else "Not loaded" }}</dd></div>
+  </dl>
+</section>
+{% if report %}
+<section aria-labelledby="events-title">
+  <h2 id="events-title">Requests sent without a budget check</h2>
+  <div class="table-wrap" tabindex="0" role="region" aria-labelledby="events-title">
+    <table class="dense" data-table="fail-open">
+      <thead><tr>{{ help.th("failopen.time") }}{{ help.th("failopen.agent") }}{{ help.th("failopen.budget") }}{{ help.th("failopen.model") }}{{ help.th("failopen.amount") }}{{ help.th("failopen.usage") }}{{ help.th("failopen.replayed_at") }}{{ help.th("failopen.acknowledged") }}</tr></thead>
+      <tbody>
+        {% for r in report.rows %}
+        <tr>
+          <td class="num"><time datetime="{{ r.occurred_at.isoformat() }}">{{ r.occurred_at | ts }}</time></td>
+          <td>{{ r.agent }}<span class="sub">{{ r.project }}</span></td>
+          <td>{{ r.budget }}</td>
+          <td><code>{{ r.model }}</code></td>
+          <td class="num amount">{{ r.amount_text }}</td>
+          <td>{% if r.usage_known %}Reported by the vendor{% else %}<span class="warn"><span aria-hidden="true">!</span> Unknown. Recorded at the estimate</span>{% endif %}</td>
+          <td class="num"><time datetime="{{ r.replayed_at.isoformat() }}">{{ r.replayed_at | ts }}</time></td>
+          <td>{% if r.acknowledged_at %}<span class="num"><time datetime="{{ r.acknowledged_at.isoformat() }}">{{ r.acknowledged_at | ts }}</time></span><span class="sub">{{ r.acknowledged_by }}</span>{% else %}<span class="warn"><span aria-hidden="true">!</span> Not yet</span>{% endif %}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8" class="empty">No request has been sent without a budget check.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+{% endblock %}

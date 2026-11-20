@@ -12,6 +12,15 @@ from tests.system.conftest import ALL_PATHS
 pytestmark = pytest.mark.req("Information system (owner brief)", "UX-14")
 
 REGISTRY = HelpRegistry.load(REPO_ROOT / "ui" / "help" / "field_help.yaml")
+# Fields that appear only after an action (a POST, or a fail-open). Each has its own walk below.
+POST_ONLY = {
+    "credential.token",
+    "failopen.banner",
+    "console.agent",
+    "console.limit_kind",
+    "console.model",
+    "console.outcome",
+}
 FIELD_SELECTOR = "th, label, input:not([type=hidden]), select, textarea, [data-kpi]"
 PARTS = ["unit", "source", "formula", "example", "range", "validation", "prd"]
 
@@ -27,13 +36,13 @@ def walk_paths(ui) -> list[str]:
         "/gateway/block?type=vendor&id=vendor-a",
         "/gateway/block?type=model&id=vendor-a/model-1",
     ]
-    return [*ALL_PATHS, *budget_links, *forms]
+    return [*ALL_PATHS, *budget_links, *forms, "/gateway/fail-open"]
 
 
 def test_every_field_column_and_kpi_has_a_registry_entry_and_an_i_button(ui_traffic):
     ui = ui_traffic
     paths = walk_paths(ui)
-    assert len(paths) == len(ALL_PATHS) + 22 + 2
+    assert len(paths) == len(ALL_PATHS) + 22 + 3
     for path in paths:
         check_fields(ui.soup(path), path)
 
@@ -49,6 +58,30 @@ def test_pages_reached_only_by_post_also_have_help_on_every_field(ui):
     soup = BeautifulSoup(response.text, "html.parser")
     check_fields(soup, "POST /gateway/credentials")
     assert soup.select_one('[data-kpi][data-field-id="credential.token"]')
+
+
+def test_console_results_and_banner_also_have_help_on_every_field(ui_traffic):
+    ui = ui_traffic
+    post = {"headers": {"Origin": "http://testserver"}}
+    assert (
+        ui.client.post(
+            "/admin/demo/ledger", data={"action": "stop"}, follow_redirects=False, **post
+        ).status_code
+        == 303
+    )
+    response = ui.client.post("/admin/demo/requests", **post)
+    assert response.status_code == 200
+    soup = BeautifulSoup(response.text, "html.parser")
+    check_fields(soup, "POST /admin/demo/requests")
+    seen = {el["data-field-id"] for el in fields_on(soup)}
+    assert {
+        "console.agent",
+        "console.limit_kind",
+        "console.model",
+        "console.outcome",
+        "failopen.banner",
+    } <= seen
+    assert soup.select_one('.help[popover][data-help-id="failopen.banner"]')
 
 
 def check_fields(soup, path):
@@ -71,7 +104,7 @@ def test_the_walk_actually_finds_fields(ui_traffic):
     assert "health.status" in seen and "alert.code" in seen
     # Every registry entry is in use somewhere: no dead help text.
     # (credential.token is on a page reached by POST only; it has its own test.)
-    assert seen == REGISTRY.ids() - {"credential.token"}
+    assert seen == REGISTRY.ids() - POST_ONLY
 
 
 def test_walk_fails_for_a_field_without_help():
@@ -86,7 +119,7 @@ def test_popover_shows_every_required_part(ui_traffic):
         for path in walk_paths(ui)[:9] + walk_paths(ui)[-2:]
         for p in ui.soup(path).select(".help[popover]")
     ]
-    assert {p["data-help-id"] for p in popovers} == REGISTRY.ids() - {"credential.token"}
+    assert {p["data-help-id"] for p in popovers} == REGISTRY.ids() - POST_ONLY
     for popover in popovers:
         entry = REGISTRY.get(popover["data-help-id"])
         assert popover.find("h2").get_text() == entry.name

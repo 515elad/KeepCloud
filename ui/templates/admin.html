@@ -1,0 +1,46 @@
+{% extends "page.html" %}
+{% block content %}
+{% if demo_console %}
+<section aria-labelledby="console-title">
+  <h2 id="console-title">Demo console</h2>
+  <p class="hint">Only in demo mode. It lets you see what a ledger outage does without stopping the database. The switch makes the gateway's ledger writes fail; reading policy and credentials keeps working.</p>
+  {% if console_error %}<p class="notice notice--bad" role="alert"><span aria-hidden="true">×</span> {{ console_error }}</p>{% endif %}
+  {% set fo = state.fail_open %}
+  <div class="console">
+    <div data-kpi data-field-id="console.ledger_state">
+      <p class="console__label">{{ help.name("console.ledger_state") }} {{ help.button("console.ledger_state") }}</p>
+      <p data-ledger-state>{% if not fo.gateway_reachable %}<span class="status status--unknown"><span class="status__icon" aria-hidden="true">?</span>Unknown</span> The gateway does not answer.{% elif fo.active %}<span class="status status--failing"><span class="status__icon" aria-hidden="true">×</span>Stopped</span>{% if fo.simulated %} Simulated by this console.{% endif %}{% else %}<span class="status status--healthy"><span class="status__icon" aria-hidden="true">✓</span>Running</span>{% endif %}</p>
+    </div>
+    <form method="post" action="/admin/demo/ledger">
+      {% if fo.active %}
+      <input type="hidden" name="action" value="restore">
+      <button type="submit" class="btn">Restore the ledger</button>
+      {% else %}
+      <input type="hidden" name="action" value="stop">
+      <button type="submit" class="btn btn--danger">Stop the ledger</button>
+      {% endif %}
+    </form>
+    <form method="post" action="/admin/demo/requests">
+      <button type="submit" class="btn">Send 8 test requests</button>
+    </form>
+  </div>
+  {% if console_results %}
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Results of the test requests">
+    <table class="dense" data-table="console">
+      <thead><tr>{{ help.th("console.agent") }}{{ help.th("console.limit_kind") }}{{ help.th("console.model") }}{{ help.th("console.outcome") }}</tr></thead>
+      <tbody>
+        {% for r in console_results %}
+        <tr data-code="{{ r.code }}">
+          <td>{{ r.agent }}<span class="sub">{{ r.project }}</span></td>
+          <td>{{ r.limit_kind }}</td>
+          <td><code>{{ r.model }}</code></td>
+          <td><span class="outcome outcome--{{ 'sent' if r.sent else 'denied' }}"><span aria-hidden="true">{{ "✓" if r.sent else "⛔" }}</span> {{ "Sent" if r.sent else "Not sent" }}</span> {{ r.outcome }} <code class="reason-code">{{ r.code }}</code></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

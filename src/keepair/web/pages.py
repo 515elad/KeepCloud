@@ -44,7 +44,7 @@ PAGES: tuple[Page, ...] = (
         "gateway",
         "Gateway",
         "Which vendors and models are allowed, and what the gateway denied and why.",
-        (Section("Fail-open report", 3, ("FR-05", "FR-12", "UX-7")),),
+        (Section("Held requests: approve or reject", 5, ("FR-11", "UX-11")),),
     ),
     Page(
         "approvals",

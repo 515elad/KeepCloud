@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import httpx
 import pytest
 from bs4 import BeautifulSoup
 from fastapi.testclient import TestClient
@@ -26,9 +27,21 @@ class Ui:
         return BeautifulSoup(response.text, "html.parser")
 
 
-def make_ui(settings, engine) -> Ui:
+def no_gateway() -> httpx.Client:
+    """A gateway that does not answer, for tests of the UI on its own."""
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("no gateway in this test")
+
+    return httpx.Client(transport=httpx.MockTransport(refuse), base_url="http://gateway.test")
+
+
+def make_ui(settings, engine, gateway_client=None) -> Ui:
     metrics, clock = Metrics(), demo_clock()
-    app = create_app(settings, engine=engine, clock=clock, metrics=metrics)
+    app = create_app(
+        settings, engine=engine, clock=clock, metrics=metrics,
+        gateway_client=gateway_client or no_gateway(),
+    )  # fmt: skip
     return Ui(TestClient(app, raise_server_exceptions=False), metrics, clock)
 
 
@@ -48,7 +61,7 @@ def ui_traffic(settings, engine) -> Ui:
     gw.chat("Ticket Triage", "vendor-a/model-3")  # denied: model blocked
     gw.chat("Research Agent")  # held
     gw.chat("Ticket Triage", "va-fast")  # allowed
-    ui = make_ui(settings, engine)
+    ui = make_ui(settings, engine, gateway_client=gw.client)  # the UI talks to this gateway
     ui.gw = gw
     return ui
 

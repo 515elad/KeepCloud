@@ -31,7 +31,7 @@
 {% if activity %}
 <section aria-labelledby="activity-title">
   <h2 id="activity-title">Gateway activity, last 24 hours</h2>
-  <p class="hint">{% if auto_refresh %}This page reloads every 5 seconds. <a href="/gateway">Stop reloading</a>{% else %}<a href="/gateway?auto=1">Reload this page every 5 seconds</a>{% endif %}</p>
+  <p class="hint">{% if auto_refresh %}This page reloads every 5 seconds. <a href="/gateway">Stop reloading</a>{% else %}<a href="/gateway?auto=1">Reload this page every 5 seconds</a>{% endif %}. <a href="/gateway/fail-open">Fail-open report</a></p>
   <dl class="kpis">
     <div data-kpi data-field-id="gateway.requests_24h"><dt>{{ help.name("gateway.requests_24h") }} {{ help.button("gateway.requests_24h") }}</dt><dd class="num">{{ "{:,}".format(activity.requests) }}</dd></div>
     <div data-kpi data-field-id="gateway.refused_24h"><dt>{{ help.name("gateway.refused_24h") }} {{ help.button("gateway.refused_24h") }}</dt><dd class="num">{{ "{:,}".format(activity.refused) }}</dd></div>

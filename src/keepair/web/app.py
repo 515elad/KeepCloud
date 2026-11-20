@@ -6,6 +6,7 @@ import uuid
 from dataclasses import dataclass, field
 from urllib.parse import parse_qs, urlsplit
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
@@ -18,6 +19,7 @@ from keepair import __version__
 from keepair.clock import Clock, SystemClock, from_iso
 from keepair.config import Settings
 from keepair.db import make_engine
+from keepair.demo.seed import agent_name, demo_token
 from keepair.failures import Alert, AlertStore, FailureReporter
 from keepair.gateway.tokens import generate_token, hash_token
 from keepair.health import ComponentHealth, read_health, unknown_health
@@ -26,7 +28,7 @@ from keepair.ids import uuid7
 from keepair.metrics import Metrics
 from keepair.registry import RegistryError, add_block
 from keepair.rng import system_rng
-from keepair.schema import agents, app_meta, gateway_credentials
+from keepair.schema import agents, app_meta, fail_events, gateway_credentials
 from keepair.web import views
 from keepair.web.formatting import format_ts
 from keepair.web.helpui import HelpContext
@@ -69,6 +71,7 @@ class PageState:
     database_reachable: bool
     demo_clock: str | None = None
     tenant_id: uuid.UUID | None = None
+    fail_open: views.FailOpenState = field(default_factory=views.FailOpenState)
     alerts: list[Alert] = field(default_factory=list)
 
 
@@ -77,6 +80,7 @@ def create_app(
     engine: Engine | None = None,
     clock: Clock | None = None,
     metrics: Metrics | None = None,
+    gateway_client: httpx.Client | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
     engine = engine or make_engine(settings)
@@ -87,6 +91,17 @@ def create_app(
     store = AlertStore(engine, clock, metrics)
     reporter = FailureReporter(store, metrics, clock)
     token_rng = system_rng()
+    gateway_http = gateway_client or httpx.Client(
+        base_url=settings.gateway_url, timeout=1.5, trust_env=False
+    )
+
+    def gateway_status() -> dict | None:
+        """The gateway's own account of its ledger and spool. None when it does not answer."""
+        try:
+            response = gateway_http.get("/status")
+            return response.json() if response.status_code == 200 else None
+        except (httpx.HTTPError, ValueError):
+            return None
 
     env = Environment(
         loader=FileSystemLoader(settings.ui_dir / "templates"),
@@ -115,6 +130,7 @@ def create_app(
         return response
 
     def load_state() -> PageState:
+        fail_open = views.fail_open_from_status(gateway_status())
         try:
             with engine.connect() as conn:
                 state = PageState(health=read_health(conn, clock), database_reachable=True)
@@ -123,6 +139,7 @@ def create_app(
                     state.demo_clock = format_ts(from_iso(meta["demo_clock"]))
                 if "tenant_id" in meta:
                     state.tenant_id = uuid.UUID(meta["tenant_id"])
+                    views.add_unacknowledged(conn, state.tenant_id, fail_open)
         except SQLAlchemyError:
             store.note_db_down()
             reporter.report(
@@ -132,6 +149,7 @@ def create_app(
             )
             state = PageState(health=unknown_health(), database_reachable=False)
         state.alerts = store.recent()
+        state.fail_open = fail_open  # known even when the UI's own database read failed
         return state
 
     def render(template: str, status_code: int = 200, **context) -> HTMLResponse:
@@ -320,6 +338,119 @@ def create_app(
         except RegistryError as exc:
             return block_form(subject_type, subject_id, reason, str(exc))
         return RedirectResponse(f"/gateway#{subject_type}s-title", status_code=303)
+
+    # --- Fail-open: status for the banner, report, acknowledgement (UX-7) -----------
+
+    @app.get("/api/fail-open")
+    def fail_open_status() -> JSONResponse:
+        return JSONResponse({"signature": load_state().fail_open.signature})
+
+    @app.get("/gateway/fail-open", response_class=HTMLResponse)
+    def fail_open_report() -> HTMLResponse:
+        page, state = page_context("gateway")
+        report = None
+        if state.tenant_id:
+            with engine.connect() as conn:
+                report = views.load_fail_open_report(conn, state.tenant_id)
+        return render("fail_open.html", page=page, state=state, report=report)
+
+    @app.post("/gateway/fail-open/acknowledge")
+    async def fail_open_acknowledge(request: Request):
+        state = load_state()
+        if not state.tenant_id:
+            raise HTTPException(status_code=404)
+        if state.fail_open.active or state.fail_open.waiting:
+            # Not over yet: there is nothing complete to acknowledge.
+            raise HTTPException(status_code=409)
+        with engine.begin() as conn:
+            conn.execute(
+                update(fail_events)
+                .where(
+                    fail_events.c.tenant_id == state.tenant_id,
+                    fail_events.c.acknowledged_at.is_(None),
+                )
+                .values(acknowledged_at=func.now(), acknowledged_by=UI_ACTOR)
+            )
+        return RedirectResponse("/gateway/fail-open", status_code=303)
+
+    # --- Demo console (demo mode only) ---------------------------------------------
+
+    def admin_page(console_results=None, console_error=None, status_code=200) -> HTMLResponse:
+        page, state = page_context("admin")
+        return render(
+            "admin.html",
+            status_code=status_code,
+            page=page,
+            state=state,
+            demo_console=settings.demo_mode and settings.env != "prod",
+            console_results=console_results,
+            console_error=console_error,
+        )
+
+    @app.get("/admin", response_class=HTMLResponse)
+    def admin() -> HTMLResponse:
+        return admin_page()
+
+    def require_demo() -> None:
+        if not settings.demo_mode or settings.env == "prod":
+            raise HTTPException(status_code=404)
+
+    @app.post("/admin/demo/ledger", response_class=HTMLResponse)
+    async def demo_ledger(request: Request):
+        require_demo()
+        form = await read_form(request)
+        action = form.get("action")
+        if action not in ("stop", "restore"):
+            raise HTTPException(status_code=422)
+        try:
+            answer = gateway_http.post("/demo/ledger-fault", json={"active": action == "stop"})
+            answer.raise_for_status()
+        except httpx.HTTPError:
+            return admin_page(
+                console_error="The gateway did not answer. Is it running?", status_code=502
+            )
+        return RedirectResponse("/admin#console-title", status_code=303)
+
+    @app.post("/admin/demo/requests", response_class=HTMLResponse)
+    async def demo_requests(request: Request):
+        require_demo()
+        state = load_state()
+        kinds: dict[str, str] = {}
+        if state.tenant_id:
+            with engine.connect() as conn:
+                kinds = views.limit_kinds(conn, state.tenant_id)
+        results = []
+        try:
+            for project, model in views.CONSOLE_REQUESTS:
+                agent = agent_name(project)
+                answer = gateway_http.post(
+                    "/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {demo_token(agent)}",
+                        "Idempotency-Key": f"console-{uuid7(clock, token_rng)}",
+                    },
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": "Demo console request."}],
+                        "max_tokens": 64,
+                    },
+                )
+                body = answer.json()
+                words, code, sent = views.describe_outcome(
+                    answer.status_code,
+                    answer.headers.get("x-keepair-decision"),
+                    body.get("error", {}).get("code") if isinstance(body, dict) else None,
+                )
+                results.append(
+                    views.ConsoleResult(
+                        agent, project, kinds.get(project, "Unknown"), model, words, code, sent
+                    )
+                )
+        except (httpx.HTTPError, ValueError):
+            return admin_page(
+                console_error="The gateway did not answer. Is it running?", status_code=502
+            )
+        return admin_page(console_results=results)
 
     @app.get("/{slug}", response_class=HTMLResponse)
     def page(slug: str) -> HTMLResponse:

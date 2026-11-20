@@ -876,3 +876,264 @@ fields:
     allowed_range: 256 bits of randomness.
     validation: A token with a wrong checksum is refused before any database lookup.
     prd_ref: SEC-12 (256-bit, hashed), SEC-22 (prefix and checksum), FR-05
+
+  failopen.banner:
+    name: Fail-open banner
+    meaning: Tells everyone that requests were sent without a budget check because the ledger could not be reached. It stays until the ledger is back, the spool is written to the ledger, and someone acknowledges it.
+    unit: Count of requests, and times as YYYY-MM-DD HH:MM:SS UTC.
+    source: calculated
+    source_detail: While it is active the count comes from the gateway's spool. Afterwards it is the number of recorded fail-open events nobody has acknowledged.
+    formula: |
+      shown = gateway reports the ledger unreachable
+              or requests wait in the spool
+              or unacknowledged fail-open events exist
+      count = requests waiting in the spool + unacknowledged events
+    formula_fn: fail_open_banner
+    worked_example:
+      description: The seeded demo data. The ledger was never down, so the banner is not shown.
+      inputs:
+        ledger_unreachable: "no"
+        waiting_in_spool: "0"
+        unacknowledged_events: "0"
+      result: not shown, count 0
+    allowed_range: Shown or not shown.
+    validation: It cannot be dismissed while fail-open is active or the spool is not yet replayed.
+    prd_ref: UX-7 (fail-open banner), SEC-06, SD-04 (pending decision)
+
+  failopen.state:
+    name: Fail-open
+    meaning: Whether the gateway is sending requests without a budget check right now. Unknown means the gateway did not answer, which is not the same as not active.
+    unit: Text. Active, Not active or Unknown.
+    source: gateway
+    source_detail: Asked from the gateway directly, so it is known even when this screen cannot read the database.
+    worked_example:
+      description: The seeded demo data, with the gateway running and the ledger reachable.
+      result: Not active
+    allowed_range: Exactly one of the three.
+    validation: Reported by the gateway. It cannot be set here.
+    prd_ref: UX-7, FR-21 (failure visibility), UX-6 (Unknown is never shown as healthy)
+
+  failopen.waiting:
+    name: Waiting in the spool
+    meaning: Requests that were sent without a budget check and are not yet written to the ledger. They are written when the ledger is back.
+    unit: Whole number.
+    source: gateway
+    source_detail: Counted by the gateway from its encrypted spool.
+    worked_example:
+      description: The seeded demo data. Nothing was spooled.
+      result: "0"
+    allowed_range: 0 up to the spool's limit of 10,000 records, 100 MB or one hour.
+    validation: When a limit is reached, further requests are refused.
+    prd_ref: SEC-06 (encrypted spool, capped), SD-04 (pending decision)
+
+  failopen.events:
+    name: Recorded
+    meaning: How many requests were sent without a budget check and have since been written to the ledger.
+    unit: Whole number.
+    source: calculated
+    source_detail: Counted from the fail-open event records.
+    formula: |
+      recorded = number of fail-open event records
+    formula_fn: fail_open_events
+    worked_example:
+      description: The seeded demo data. The ledger was never down.
+      inputs:
+        fail_open_event_records: "0"
+      result: "0"
+    allowed_range: 0 or more.
+    validation: Calculated only. Each spooled request becomes exactly one record, however often the spool is replayed.
+    prd_ref: FR-12 (fail-open activity report), FR-05 (every fail-open request is counted)
+
+  failopen.unacknowledged:
+    name: Not acknowledged
+    meaning: How many of the recorded requests nobody has acknowledged yet. The banner stays while this is above zero.
+    unit: Whole number.
+    source: calculated
+    source_detail: Counted from the fail-open event records.
+    formula: |
+      not_acknowledged = number of fail-open event records with no acknowledgement time
+    formula_fn: fail_open_unacknowledged
+    worked_example:
+      description: The seeded demo data. The ledger was never down.
+      inputs:
+        records_without_acknowledgement: "0"
+      result: "0"
+    allowed_range: 0 up to Recorded.
+    validation: Calculated only.
+    prd_ref: UX-7 (cannot be dismissed until acknowledged), FR-12
+
+  failopen.time:
+    name: Time
+    meaning: When the request was sent.
+    unit: Date and time, ISO 8601, stored in UTC. Shown as YYYY-MM-DD HH:MM:SS UTC.
+    source: gateway
+    source_detail: The gateway's clock when it wrote the spool record, before sending.
+    worked_example:
+      description: A request spooled at the demo clock time would show this value.
+      result: "2026-01-15 09:00:00 UTC"
+    allowed_range: Any past time.
+    validation: Must carry a timezone. Stored as UTC.
+    prd_ref: FR-12 (fail-open report)
+
+  failopen.agent:
+    name: Agent
+    meaning: The agent whose credential made the request, with its project underneath.
+    unit: Text.
+    source: gateway
+    source_detail: Derived from the gateway credential and kept in the spool record.
+    worked_example:
+      description: The agent of the Ticket Triage project, whose budgets are all soft.
+      result: ticket-triage-agent (Ticket Triage)
+    allowed_range: Agents whose whole budget path is monitor or soft.
+    validation: An agent with a hard-limit or approval budget on its path never appears here.
+    prd_ref: FR-12, FR-05 (principal from the credential)
+
+  failopen.budget:
+    name: Budget
+    meaning: The project budget the request was charged to after the ledger came back.
+    unit: Text. The budget's scope name.
+    source: gateway
+    source_detail: Kept in the spool record and applied at replay to every budget on its limit path.
+    worked_example:
+      description: A request from the Ticket Triage agent.
+      result: Ticket Triage
+    allowed_range: Monitor and soft budgets only.
+    validation: Hard-limit and approval budgets fail closed and never appear here.
+    prd_ref: FR-12 (fail-open report lists the budget), SEC-06
+
+  failopen.model:
+    name: Model
+    meaning: The canonical model the request was sent to. Blocks were applied before sending, so it is always an allowed model.
+    unit: Text, lower case, vendor/model.
+    source: gateway
+    source_detail: Resolved in the registry before the request was sent.
+    worked_example:
+      description: A request that asked for the alias model-1.
+      result: vendor-a/model-1
+    allowed_range: Allowed models of allowed vendors.
+    validation: A blocked or unregistered model is refused whether the ledger is up or down.
+    prd_ref: FR-18 (blocks never fail open), FR-12
+
+  failopen.amount:
+    name: Amount
+    meaning: What the request cost, charged to the budget when the ledger came back.
+    unit: Money in the budget's currency. Stored as micro-units. Shown with two decimals, or with up to six when it is below one cent.
+    source: gateway
+    source_detail: From the vendor's usage figures. If the vendor gave none, the estimate made before sending.
+    worked_example:
+      description: A small request of about 60 output tokens costs well under one cent (885 micro-units).
+      result: 0.000885 USD
+    allowed_range: 0 or more.
+    validation: Whole micro-units, never negative.
+    prd_ref: FR-12, FR-05 (settle), FR-02
+
+  failopen.usage:
+    name: Usage
+    meaning: Whether the amount is the vendor's reported usage or only the estimate made before sending.
+    unit: Text.
+    source: gateway
+    source_detail: Recorded by the gateway after the vendor answered, or left unknown if no answer was recorded.
+    worked_example:
+      description: A request the vendor answered normally.
+      result: Reported by the vendor
+    allowed_range: Reported by the vendor, or Unknown.
+    validation: Unknown usage is charged at the estimate, which is an upper bound.
+    prd_ref: FR-05 (usage_known), FR-12
+
+  failopen.replayed_at:
+    name: Written to ledger
+    meaning: When the spooled record was written to the ledger and charged to the budget.
+    unit: Date and time, ISO 8601, stored in UTC. Shown as YYYY-MM-DD HH:MM:SS UTC.
+    source: gateway
+    source_detail: Set by the gateway when it replays the spool.
+    worked_example:
+      description: A record replayed at the demo clock time would show this value.
+      result: "2026-01-15 09:00:00 UTC"
+    allowed_range: Not before Time.
+    validation: Each record is written once. Replaying again changes nothing.
+    prd_ref: SEC-06 (replay and reconciliation), FR-12 (whether reconciled)
+
+  failopen.acknowledged:
+    name: Acknowledged
+    meaning: When someone confirmed they have seen this fail-open, and who.
+    unit: Date and time as YYYY-MM-DD HH:MM:SS UTC, then the actor. "Not yet" until acknowledged.
+    source: user input
+    source_detail: Set by the Acknowledge button on the banner.
+    worked_example:
+      description: A record acknowledged from this screen before sign-in exists.
+      result: "2026-01-15 09:00:00 UTC, demo-operator"
+    allowed_range: Any time after the record was written to the ledger.
+    validation: Not possible while fail-open is active or the spool is not yet replayed.
+    prd_ref: UX-7 (acknowledgement), FR-12 (fail_events.acknowledged_at)
+
+  console.ledger_state:
+    name: Ledger, as the gateway sees it
+    meaning: Whether the gateway can write to the ledger. Stopping it here is a simulation for the demo, not a real outage.
+    unit: Text. Running, Stopped or Unknown.
+    source: gateway
+    source_detail: Asked from the gateway directly.
+    worked_example:
+      description: The seeded demo data with the gateway running.
+      result: Running
+    allowed_range: Exactly one of the three.
+    validation: The switch exists in demo mode only. The gateway does not offer it in production.
+    prd_ref: SEC-06 (failure policy), SEC-23 (test material refused in production)
+
+  console.agent:
+    name: Agent
+    meaning: The demo agent that sent the test request, with its project underneath.
+    unit: Text.
+    source: seed script
+    source_detail: Fixed list of eight test requests in the application.
+    worked_example:
+      description: The first test request.
+      result: ticket-triage-agent (Ticket Triage)
+    allowed_range: Demo agents.
+    validation: Fixed. It cannot be edited.
+    prd_ref: FR-05, hard rule 2 of the owner brief (demo data)
+
+  console.limit_kind:
+    name: Budgets on its path
+    meaning: Whether any budget that limits this project can stop spend. Only projects with monitor and soft budgets alone may continue during a ledger outage.
+    unit: Text.
+    source: calculated
+    source_detail: Calculated from the policies of the budgets on the project's limit path.
+    formula: |
+      "Hard limit or approval on its path"  when any budget on the limit path is Hard limit or Approval
+      "Monitor and soft only"               otherwise
+    formula_fn: console_limit_kind
+    worked_example:
+      description: The Ticket Triage project. Its own, team, department and organization budgets are all soft limits.
+      inputs:
+        project: Ticket Triage
+        policies_on_path: Soft limit, Soft limit, Soft limit, Soft limit
+      result: Monitor and soft only
+    allowed_range: One of the two.
+    validation: Calculated only.
+    prd_ref: FR-05 (policy modes and fail behavior), SEC-06, FR-04
+
+  console.model:
+    name: Requested model
+    meaning: The model name the test request asked for. Some are blocked or unregistered on purpose.
+    unit: Text.
+    source: seed script
+    source_detail: Fixed list of eight test requests in the application.
+    worked_example:
+      description: The sixth test request asks for an alias of a blocked vendor's model.
+      result: vb-large
+    allowed_range: Fixed list.
+    validation: Fixed. It cannot be edited.
+    prd_ref: FR-18, UX-4
+
+  console.outcome:
+    name: Outcome
+    meaning: What the gateway did with the test request, in plain words, with the code the agent received.
+    unit: Text, then the code in upper case.
+    source: gateway
+    source_detail: The gateway's answer to the test request.
+    worked_example:
+      description: A soft-budget request while the ledger is stopped.
+      result: Sent. Sent without a budget check while the ledger was down FAIL_OPEN
+    allowed_range: Only codes registered in the gateway.
+    validation: The words are looked up from the code.
+    prd_ref: SEC-11 (stable reason codes), SEC-06, UX-5

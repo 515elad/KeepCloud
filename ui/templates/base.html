@@ -32,7 +32,7 @@
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/app.js" defer></script>
 </head>
-<body>
+<body{% if state is defined %} data-fail-open="{{ state.fail_open.signature }}"{% endif %}>
   <a class="skip" href="#main">Skip to content</a>
   {% if demo_mode %}
   <p class="demo-band" data-demo-label><strong>DEMO</strong> <span>Generated sample data. Nothing shown here is real spend.</span></p>
@@ -41,6 +41,29 @@
     <a class="brand" href="/">KeepAir</a>
     {% block health_strip %}{% endblock %}
   </header>
+  {% if state is defined and state.fail_open.show_banner %}
+  {% set fo = state.fail_open %}
+  <section class="failopen{% if fo.active %} failopen--active{% endif %}" role="{{ 'alert' if fo.active else 'status' }}" aria-labelledby="failopen-title" data-fail-open-banner>
+    <h2 id="failopen-title"><span aria-hidden="true">{{ "!" if fo.active else "i" }}</span> {% if fo.active %}Fail-open is active{% elif fo.waiting %}Fail-open ended, replay not finished{% else %}Fail-open happened and is not acknowledged{% endif %} {{ help.button("failopen.banner") }}</h2>
+    <p data-kpi data-field-id="failopen.banner">
+      {% if fo.active %}
+      The gateway cannot use the ledger{% if fo.since %} since <time datetime="{{ fo.since.isoformat() }}">{{ fo.since | ts }}</time>{% endif %}{% if fo.simulated %} (simulated from the demo console){% endif %}.
+      <strong data-fail-open-count>{{ fo.waiting }}</strong> {{ "request was" if fo.waiting == 1 else "requests were" }} sent without a budget check and wait in the spool.
+      Hard limits, approval budgets and every block still refuse.
+      {% elif fo.waiting %}
+      <strong data-fail-open-count>{{ fo.waiting }}</strong> {{ "request waits" if fo.waiting == 1 else "requests wait" }} in the spool to be written to the ledger.
+      {% else %}
+      <strong data-fail-open-count>{{ fo.unacknowledged }}</strong> {{ "request was" if fo.unacknowledged == 1 else "requests were" }} sent without a budget check between <time datetime="{{ fo.first_at.isoformat() }}">{{ fo.first_at | ts }}</time> and <time datetime="{{ fo.last_at.isoformat() }}">{{ fo.last_at | ts }}</time>. They are now in the ledger.
+      {% endif %}
+      <a href="/gateway/fail-open">Open the fail-open report</a>
+    </p>
+    {% if fo.active or fo.waiting %}
+    <p class="failopen__ack"><button type="button" class="btn btn--small" disabled aria-describedby="failopen-why">Acknowledge</button> <span id="failopen-why">It can be acknowledged once the ledger is back and the spool is replayed.</span></p>
+    {% else %}
+    <form method="post" action="/gateway/fail-open/acknowledge" class="failopen__ack"><button type="submit" class="btn btn--small">Acknowledge</button> <span>This banner stays until someone acknowledges it.</span></form>
+    {% endif %}
+  </section>
+  {% endif %}
   <div class="frame">
     <nav class="nav" aria-label="Main">
       <ul>

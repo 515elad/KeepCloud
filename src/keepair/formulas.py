@@ -185,6 +185,48 @@ def _credential_status(conn: Connection, clock: Clock) -> Evaluated:
     )
 
 
+def _fail_open_report(conn: Connection) -> views.FailOpenReport:
+    return views.load_fail_open_report(conn, _tenant(conn))
+
+
+def _fail_open_banner(conn: Connection, clock: Clock) -> Evaluated:
+    # No gateway status is involved in the seeded state: the ledger was never unreachable.
+    state = views.FailOpenState(gateway_reachable=True)
+    views.add_unacknowledged(conn, _tenant(conn), state)
+    shown = "shown" if state.show_banner else "not shown"
+    return Evaluated(
+        inputs={
+            "ledger_unreachable": "yes" if state.active else "no",
+            "waiting_in_spool": str(state.waiting),
+            "unacknowledged_events": str(state.unacknowledged),
+        },
+        result=f"{shown}, count {state.count}",
+    )
+
+
+def _fail_open_events(conn: Connection, clock: Clock) -> Evaluated:
+    count = _fail_open_report(conn).events
+    return Evaluated({"fail_open_event_records": str(count)}, str(count))
+
+
+def _fail_open_unacknowledged(conn: Connection, clock: Clock) -> Evaluated:
+    count = _fail_open_report(conn).unacknowledged
+    return Evaluated({"records_without_acknowledgement": str(count)}, str(count))
+
+
+def _console_limit_kind(conn: Connection, clock: Clock) -> Evaluated:
+    tenant = _tenant(conn)
+    all_budgets = B.load_budgets(conn, tenant)
+    names = views.load_scope_names(conn, tenant)
+    project = "Ticket Triage"
+    budget = next(b for b in all_budgets.values() if names[b.scope_id] == project)
+    policies = [views.POLICY_LABEL[x.policy] for x in B.constraint_path(budget, all_budgets)]
+    return Evaluated(
+        inputs={"project": project, "policies_on_path": ", ".join(policies)},
+        result=views.limit_kinds(conn, tenant)[project],
+    )
+
+
 FORMULAS: dict[str, Callable[[Connection, Clock], Evaluated]] = {
     "health_status": _health_status,
     "coverage_state": _coverage_state,
@@ -200,4 +242,8 @@ FORMULAS: dict[str, Callable[[Connection, Clock], Evaluated]] = {
     "denial_count": _denial_count,
     "denial_trend": _denial_trend,
     "credential_status": _credential_status,
+    "fail_open_banner": _fail_open_banner,
+    "fail_open_events": _fail_open_events,
+    "fail_open_unacknowledged": _fail_open_unacknowledged,
+    "console_limit_kind": _console_limit_kind,
 }
